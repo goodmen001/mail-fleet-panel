@@ -14,7 +14,7 @@ import versionRoutes from './routes/version.js';
 import userRoutes from './routes/user.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 });
+const app = fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 });
 
 async function main() {
 await app.register(cors, { origin: true });
