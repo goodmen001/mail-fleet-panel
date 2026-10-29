@@ -88,7 +88,8 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   step(`静态资源 ${Object.keys(manifest).length} 个文件`);
   const session = await cf(headers, 'POST', `/accounts/${accountId}/workers/scripts/${workerName}/assets-upload-session`, { manifest });
   let completionJwt = session.jwt;
-  const missing = (session.buckets || []).flat();
+  // CF returns buckets as [[hashStr,...],...] or [[{hash},...],...] depending on API version — accept both
+  const missing = (session.buckets || []).flat().map(e => typeof e === 'string' ? { hash: e } : e).filter(e => e && e.hash);
   if (missing.length) {
     step(`需上传 ${missing.length} 个资源文件`);
     // hash → path index (case-insensitive compare, CF sometimes normalizes case)

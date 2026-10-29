@@ -128,15 +128,17 @@ export default async function (app) {
     // refresh the signed cookie so long sessions keep working
     reply.header('Set-Cookie', `cmconsole=${makeKey(site.site_id, COOKIE_TTL_S * 1000)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_TTL_S}`);
     let token = null, error = null;
-    try { token = await getToken(site); } catch (e) { error = '站点登录失败：' + e.message; }
-    let html = '';
-    if (!error) {
-      try {
-        const res = await fetch(site.base_url + '/');
-        html = await res.text();
-        if (!html) error = '站点返回空页面';
-      } catch (e) { error = '无法访问站点：' + e.message; }
+    try { token = await getToken(site); } catch (e) {
+      // stored credentials failed — still serve the site's own page so the
+      // user can log in manually inside the console (login API is auth-free)
+      token = null;
     }
+    let html = '';
+    try {
+      const res = await fetch(site.base_url + '/');
+      html = await res.text();
+      if (!html) error = '站点返回空页面';
+    } catch (e) { error = '无法访问站点：' + e.message; }
     const prefix = `/api/site/console/${site.site_id}`;
     reply.type('text/html; charset=utf-8');
     reply.header('Content-Security-Policy', "frame-ancestors 'self'");
@@ -184,32 +186,48 @@ export default async function (app) {
     const params = new URLSearchParams(req.raw.url.split('?')[1] || '');
     params.delete('key');
     const qs = params.toString() ? '?' + params.toString() : '';
+    // If the client already carries its own site token (user logged in inside
+    // the iframe), pass it through untouched — never override it with our
+    // server-side token, and never block the request behind siteLogin: if the
+    // panel's stored credentials are stale, that made manual login inside the
+    // console fail too ("身份认证失效" with no way out).
+    const clientAuth = req.headers.authorization;
+    const isAuthFree = /(^|\/)(login|verifycode|email\/verify)(\/|$)|^public/.test(rel);
     const call = (token) => fetch(`${site.base_url}/api/${rel}${qs}`, {
       method: req.method,
       headers: {
         'Content-Type': req.headers['content-type'] || 'application/json',
-        Authorization: `Bearer ${token}`
+        ...(clientAuth ? { Authorization: clientAuth }
+          : token ? { Authorization: `Bearer ${token}` } : {})
       },
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body ?? {})
     });
-    // always use a fresh site token: cached ones expire and the embedded UI
-    // would show "身份认证失效" with no way to re-login inside the iframe
-    let token;
-    try {
-      token = await getToken(site);
-    } catch (e) {
-      return reply.code(502).send({ code: 502, message: '站点登录失败: ' + e.message });
+    // only fall back to panel-stored credentials when the client has no token
+    let token = null;
+    if (!clientAuth && !isAuthFree) {
+      try {
+        token = await getToken(site);
+      } catch (e) {
+        // stored credentials failed — still forward the request unauthenticated
+        // so /login etc. work; protected endpoints will get the site's own 401
+        token = null;
+      }
     }
     let res;
     try { res = await call(token); } catch (e) {
       return reply.code(502).send({ code: 502, message: '站点不可达: ' + e.message });
     }
     if (res.status === 401) {
-      // token may have been revoked mid-session — one relogin + retry
-      try {
-        token = await getToken(site);
-        res = await call(token);
-      } catch { /* keep original 401 response */ }
+      if (clientAuth) {
+        // the client's own token expired — let the site's response reach the
+        // embedded UI so it clears its token and shows its login page
+      } else {
+        // our server-side token may have been revoked mid-session — relogin + retry
+        try {
+          token = await getToken(site);
+          res = await call(token);
+        } catch { /* keep original 401 response */ }
+      }
     }
     reply.code(res.status);
     const text = await res.text();
