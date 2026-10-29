@@ -100,6 +100,9 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="Token/Key"><el-input v-model="credForm.token" type="password" show-password/></el-form-item>
+        <el-form-item v-if="credForm.kind === 'global_key'" label="注册邮箱">
+          <el-input v-model="credForm.authEmail" placeholder="Cloudflare 账号登录邮箱（Global Key 必填）"/>
+        </el-form-item>
         <el-form-item label="Account ID"><el-input v-model="credForm.accountId" placeholder="可留空，部署时再填"/></el-form-item>
       </el-form>
       <template #footer>
@@ -120,7 +123,7 @@ const creds = ref([])
 const records = ref([])
 const credShow = ref(false)
 const deploying = ref(false)
-const credForm = ref({ name: '', kind: 'token', token: '', accountId: '' })
+const credForm = ref({ name: '', kind: 'token', token: '', accountId: '', authEmail: '' })
 const me = JSON.parse(localStorage.getItem('panel_user') || '{}')
 const isAdmin = me.role === 'admin'
 
@@ -168,7 +171,7 @@ async function addCred() {
     await axios.post('/credential/add', credForm.value)
     ElMessage.success('凭证已保存')
     credShow.value = false
-    credForm.value = { name: '', kind: 'token', token: '', accountId: '' }
+    credForm.value = { name: '', kind: 'token', token: '', accountId: '', authEmail: '' }
     load()
   } catch (e) {
     ElMessage.error(e.response?.data?.message || '保存失败')

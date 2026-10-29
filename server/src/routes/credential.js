@@ -11,31 +11,31 @@ export default async function (app) {
   });
 
   app.post('/add', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
-    const { name, kind, token, accountId } = req.body || {};
+    const { name, kind, token, accountId, authEmail } = req.body || {};
     if (!name || !token) return reply.code(400).send({ code: 400, message: '名称和凭证必填' });
+    if (kind === 'global_key' && !authEmail) {
+      return reply.code(400).send({ code: 400, message: 'Global API Key 需要同时填写注册邮箱（Cloudflare 账号登录邮箱）' });
+    }
+    const tk = String(token).trim();
     // verify against Cloudflare immediately
     const headers = kind === 'global_key'
-      ? { 'X-Auth-Email': req.body.authEmail || '', 'X-Auth-Key': token }
-      : { Authorization: `Bearer ${token}` };
-    const res = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', { headers }).catch(() => null);
-    let accountChecked = null;
-    if (res && res.ok) {
-      const j = await res.json();
-      if (!j.success && kind === 'token') {
-        return reply.code(400).send({ code: 400, message: 'Cloudflare Token 校验失败：' + (j.errors?.[0]?.message || 'unknown') });
-      }
-      if (kind === 'global_key') {
-        const v = await fetch('https://api.cloudflare.com/client/v4/user', { headers });
-        const vj = await v.json();
-        if (!vj.success) return reply.code(400).send({ code: 400, message: 'Global Key 校验失败' });
-        accountChecked = accountId || null;
-      }
+      ? { 'X-Auth-Email': String(authEmail).trim(), 'X-Auth-Key': tk }
+      : { Authorization: `Bearer ${tk}` };
+    const verifyUrl = kind === 'global_key'
+      ? 'https://api.cloudflare.com/client/v4/user'
+      : 'https://api.cloudflare.com/client/v4/user/tokens/verify';
+    let j = null;
+    try {
+      const res = await fetch(verifyUrl, { headers });
+      j = await res.json();
+    } catch { return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API' }); }
+    if (!j?.success) {
+      const label = kind === 'global_key' ? 'Global Key 校验失败' : 'Cloudflare Token 校验失败';
+      return reply.code(400).send({ code: 400, message: label + '：' + (j?.errors?.[0]?.message || '响应异常') });
     }
-    if (kind !== 'global_key' && !res) {
-      return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API' });
-    }
-    const r = db.prepare('INSERT INTO cf_credential (name, kind, token_enc, account_id) VALUES (?,?,?,?)')
-      .run(name, kind === 'global_key' ? 'global_key' : 'token', encrypt(token), accountId || accountChecked);
+    // token verify succeeded; account id stays as user-provided
+    const r = db.prepare('INSERT INTO cf_credential (name, kind, token_enc, account_id, auth_email) VALUES (?,?,?,?,?)')
+      .run(name, kind === 'global_key' ? 'global_key' : 'token', encrypt(tk), accountId, kind === 'global_key' ? String(authEmail).trim() : null);
     return { code: 200, data: { credId: r.lastInsertRowid }, message: '凭证已保存' };
   });
 
@@ -69,9 +69,9 @@ export default async function (app) {
   app.getCredentialHeaders = (credId) => {
     const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0);
     if (!row) return null;
-    const token = decrypt(row.token_enc);
+    const token = decrypt(row.token_enc).trim();
     return row.kind === 'global_key'
-      ? { 'X-Auth-Email': row.auth_email || '', 'X-Auth-Key': token }
+      ? { 'X-Auth-Email': (row.auth_email || '').trim(), 'X-Auth-Key': token }
       : { Authorization: `Bearer ${token}` };
   };
   app.getAccountId = (credId) => db.prepare('SELECT account_id FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0)?.account_id;

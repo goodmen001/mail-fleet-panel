@@ -8,6 +8,8 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'panel.db'));
 db.exec('PRAGMA journal_mode = WAL');
+// migration: auth email for Global API Key credentials
+try { db.exec('ALTER TABLE cf_credential ADD COLUMN auth_email TEXT'); } catch { /* exists */ }
 
 // ---- crypto for Cloudflare credentials ----
 const SECRET = process.env.PANEL_SECRET || 'change-me-in-production';
