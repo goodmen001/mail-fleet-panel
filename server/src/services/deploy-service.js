@@ -43,7 +43,8 @@ function buildAssetManifest(dir) {
       if (name.isDirectory()) walk(relPath);
       else if (!name.isSymbolicLink()) {
         const full = path.join(dir, relPath);
-        manifest[relPath.replace(/\\/g, '/')] = { hash: hashAssetFile(full), size: fs.statSync(full).size };
+        // CF requires manifest keys to start with "/"
+        manifest['/' + relPath.replace(/\\/g, '/')] = { hash: hashAssetFile(full), size: fs.statSync(full).size };
       }
     }
   };
@@ -90,7 +91,7 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   if (missing.length) {
     const form = new FormData();
     for (const entry of missing) {
-      const relPath = Object.keys(manifest).find(k => manifest[k].hash === entry.hash);
+      const relPath = Object.keys(manifest).find(k => manifest[k].hash === entry.hash).slice(1);
       const buf = fs.readFileSync(path.join(workerDistDir, relPath));
       form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
     }
