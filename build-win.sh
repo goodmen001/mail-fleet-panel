@@ -17,9 +17,13 @@ echo "[3/4] staging worker deploy bundle (data/worker-dist)..."
 # worker.js: wrangler dry-run bundle of cloud-mail mail-worker (ESM, self-contained);
 # static assets: mail-worker's built frontend. Refresh the repo copy (docker build
 # context) and the winpkg copy from the same build.
+# The shipped data dir must contain ONLY worker-dist: a stale panel.db from test
+# runs locked users out (undecryptable credentials under the app's PANEL_SECRET,
+# phantom test sites) — the "手动装可以，做成应用就有问题" bug.
 (cd /cloudmail/cloud-mail/mail-worker && npx wrangler deploy --dry-run --outdir /tmp/worker-bundle >/dev/null)
 rm -rf data/worker-dist /tmp/sea/winpkg/data/worker-dist
 mkdir -p data/worker-dist /tmp/sea/winpkg/data/worker-dist
+rm -rf /tmp/sea/winpkg/data/bundles /tmp/sea/winpkg/data/panel.db /tmp/sea/winpkg/data/panel.db-wal /tmp/sea/winpkg/data/panel.db-shm
 cp /tmp/worker-bundle/index.js data/worker-dist/worker.js
 cp -r /cloudmail/cloud-mail/mail-worker/dist/. data/worker-dist/
 cp -r data/worker-dist/. /tmp/sea/winpkg/data/worker-dist/
@@ -46,5 +50,8 @@ assert '复制密码' in d, 'zip missing NEW console UI!'
 z.read('data/worker-dist/worker.js')
 z.read('data/worker-dist/index.html')
 assert any(n.startswith('data/worker-dist/assets/') for n in z.namelist()), 'worker-dist assets missing!'
+# the app zip must NOT ship a used database (test data + undecryptable creds)
+assert not any(n.startswith('data/panel.db') for n in z.namelist()), 'stale panel.db shipped!'
+assert not any(n.startswith('data/bundles') for n in z.namelist()), 'stale bundles shipped!'
 print('OK ->', out, os.path.getsize(out))
 EOF
