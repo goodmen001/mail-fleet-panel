@@ -17,9 +17,11 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="280">
+        <el-table-column label="操作" width="300">
           <template #default="{row}">
-            <el-button size="small" type="primary" @click="openConsole(row)">进入控制台</el-button>
+            <el-badge :value="unread[row.site_id]" :max="99" :hidden="!unread[row.site_id]" class="unread-badge">
+              <el-button size="small" type="primary" @click="openConsole(row)">控制台</el-button>
+            </el-badge>
             <el-button size="small" @click="copyCred(row)" v-if="isAdmin">复制密码</el-button>
             <el-button size="small" @click="check(row)">体检</el-button>
             <el-button size="small" type="danger" @click="del(row)" v-if="isAdmin">移除</el-button>
@@ -28,17 +30,29 @@
       </el-table>
     </div>
 
-    <!-- embedded console: panel proxies the site same-origin, so auto-login works -->
-    <div v-if="consoleSite" class="tech-card" style="margin-top:20px">
-      <div class="tech-title">
-        <Icon icon="mdi:monitor-dashboard"/>{{ consoleSite.name }} · 控制台
+    <!-- multi-console tabs: iframes stay mounted (v-show) so each console
+         keeps its state while hidden; the last-clicked tab is on top and
+         the others collapse automatically -->
+    <div v-if="consoles.length" class="tech-card" style="margin-top:20px">
+      <div class="console-tabs">
+        <div v-for="c in consoles" :key="c.site_id"
+             class="console-tab" :class="{ active: c.site_id === activeId }"
+             @click="activateConsole(c)">
+          <span class="dot" :class="unread[c.site_id] ? 'has-unread' : ''"></span>
+          <span class="tab-name">{{ c.name }}</span>
+          <el-badge v-if="unread[c.site_id]" :value="unread[c.site_id]" :max="99" class="tab-badge"/>
+          <Icon icon="mdi:close" class="tab-close" @click.stop="closeConsole(c)"/>
+        </div>
         <span style="margin-left:auto;display:flex;gap:8px">
-          <el-button size="small" @click="reloadConsole">刷新</el-button>
-          <el-button size="small" @click="openNewTab(consoleSite)">新标签页打开</el-button>
-          <el-button size="small" type="danger" @click="consoleSite = null">关闭</el-button>
+          <el-button size="small" @click="reloadConsole(activeId)">刷新当前</el-button>
+          <el-button size="small" @click="openNewTab(activeSite)">新标签页</el-button>
+          <el-button size="small" type="danger" @click="closeConsole(activeSite)">关闭当前</el-button>
+          <el-button size="small" type="danger" plain @click="closeAll">全部关闭</el-button>
         </span>
       </div>
-      <iframe v-if="consoleUrl" :src="consoleUrl" class="console-frame" referrerpolicy="no-referrer"></iframe>
+      <div v-for="c in consoles" :key="c.site_id" v-show="c.site_id === activeId">
+        <iframe v-if="c.url" :src="c.url" class="console-frame" referrerpolicy="no-referrer"></iframe>
+      </div>
     </div>
 
     <el-dialog v-model="addShow" title="接入 cloud-mail 站点" width="480">
@@ -57,7 +71,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Icon } from '@iconify/vue'
 import axios from 'axios'
@@ -104,30 +118,73 @@ async function checkAll() {
   ElMessage.success('体检完成')
 }
 
-// Embedded console: the panel proxies the site same-origin under
-// /api/site/console/:siteId/ and injects the admin token into localStorage
-// before the site's app boots, so the iframe logs in automatically.
-const consoleSite = ref(null)
-const consoleUrl = ref('')
+// ---- multi-console: one tab per open site; iframes stay mounted so hidden
+// consoles keep their state. Last clicked/activated tab is shown on top —
+// the others automatically collapse behind it.
+const consoles = ref([])   // [{ site_id, name, url, key }]
+const activeId = ref(null)
+const activeSite = computed(() => consoles.value.find(c => c.site_id === activeId.value) || null)
+
+// ---- unread badge per site (server aggregates each site's admin API) ----
+const unread = ref({})     // site_id -> count|null
+let unreadTimer = null
+async function loadUnread() {
+  try {
+    const { data } = await axios.get('/site/unread')
+    if (data.code === 200) unread.value = data.data
+  } catch { /* offline sites are fine — badge just stays hidden */ }
+}
 
 async function openConsole(row) {
   try {
     const { data } = await axios.post(`/site/console/prepare/${row.site_id}`)
-    consoleSite.value = row
-    consoleUrl.value = `/api/site/console/embed/${row.site_id}?key=${encodeURIComponent(data.data.key)}`
+    const existing = consoles.value.find(c => c.site_id === row.site_id)
+    const entry = existing || { site_id: row.site_id, name: row.name, url: '', key: '' }
+    // a fresh key each activation: the 10-min HMAC embed key and injected
+    // token are re-issued, so a tab opened long ago recovers on re-click
+    entry.key = data.data.key
+    entry.url = `/api/site/console/embed/${row.site_id}?key=${encodeURIComponent(data.data.key)}`
+    if (!existing) consoles.value.push(entry)
+    activeId.value = row.site_id
     ElMessage.success(`已加载 ${row.name} 控制台（自动登录）`)
   } catch (e) {
     ElMessage.error(e.response?.data?.message || '打开控制台失败')
   }
 }
 
-function reloadConsole() {
-  // re-issue key + token, reload the iframe
-  openConsole(consoleSite.value)
+function activateConsole(c) {
+  // re-activate with a fresh key so the iframe reloads logged-in (the embed
+  // key/token expire after 10 min / 2 h); avoid reloading on every click
+  // by only refreshing when the tab was NOT already active
+  if (c.site_id !== activeId.value) {
+    activeId.value = c.site_id
+  } else {
+    openConsole({ ...c, name: c.name })
+  }
+}
+
+function reloadConsole(siteId) {
+  const row = sites.value.find(s => s.site_id === siteId) || activeSite.value
+  if (row) openConsole(row)
+}
+
+function closeConsole(c) {
+  if (!c) return
+  const idx = consoles.value.findIndex(x => x.site_id === c.site_id)
+  if (idx >= 0) consoles.value.splice(idx, 1)
+  if (activeId.value === c.site_id) {
+    // show the most recently opened remaining tab
+    activeId.value = consoles.value.length ? consoles.value[Math.max(0, idx - 1)].site_id : null
+  }
+}
+
+function closeAll() {
+  consoles.value = []
+  activeId.value = null
 }
 
 function openNewTab(row) {
-  window.open(row.base_url, '_blank')
+  if (row) window.open(row.base_url, '_blank')
 }
 
 // copy the stored admin password so the user can paste it once on the site login page
@@ -156,10 +213,46 @@ async function del(row) {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  loadUnread()
+  unreadTimer = setInterval(loadUnread, 30000) // 30s poll, server caches 30s per site
+})
+onUnmounted(() => clearInterval(unreadTimer))
 </script>
 
 <style scoped>
+.unread-badge :deep(.el-badge__content) { pointer-events: none; }
+.console-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.console-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #9aa4b2;
+  user-select: none;
+  max-width: 220px;
+}
+.console-tab .tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.console-tab.active {
+  color: #e7ecf3;
+  border-color: #409eff;
+  background: rgba(64, 158, 255, .12);
+}
+.console-tab .dot { width: 7px; height: 7px; border-radius: 50%; background: #4a5568; flex: none; }
+.console-tab .dot.has-unread { background: #f56c6c; box-shadow: 0 0 4px #f56c6c; }
+.console-tab .tab-close { color: #6b7280; }
+.console-tab .tab-close:hover { color: #f56c6c; }
 .console-frame {
   width: 100%;
   height: calc(100vh - 220px);

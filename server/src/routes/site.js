@@ -89,6 +89,43 @@ export default async function (app) {
     }
   });
 
+  // ---- unread badge: how many UNREAD receive-mails each site has ----
+  // Uses the site's admin API /api/allEmail/list (brief columns already carry
+  // the per-email `unread` flag) — one login, count locally, cache 30s so a
+  // row of open consoles doesn't hammer every site on each poll.
+  const unreadCache = new Map(); // siteId -> { at, unread }
+  const UNREAD_TTL = 30 * 1000;
+  app.get('/unread', { preHandler: [app.auth] }, async () => {
+    const sites = db.prepare('SELECT * FROM site ORDER BY site_id').all();
+    const now = Date.now();
+    await Promise.all(sites.map(async s => {
+      const c = unreadCache.get(s.site_id);
+      if (c && now - c.at < UNREAD_TTL) return;
+      try {
+        let token = s.jwt_cache;
+        const call = () => fetch(`${s.base_url}/api/allEmail/list?type=receive&size=50&full=0`, {
+          headers: { Authorization: `Bearer ${token}` }
+        }).then(r => r.status === 401 ? null : r.json());
+        let j = await call();
+        if (!j || j.code !== 200) {
+          token = await siteLogin(s);
+          db.prepare('UPDATE site SET jwt_cache=?, status=?, last_check=datetime(\'now\') WHERE site_id=?').run(token, 'online', s.site_id);
+          j = await call();
+        }
+        unreadCache.set(s.site_id, { at: now, unread: j?.code === 200 ? (j.data.list || []).filter(e => e.unread === 0).length : null });
+      } catch {
+        unreadCache.set(s.site_id, { at: now, unread: null }); // offline / unreachable
+      }
+    }));
+    return {
+      code: 200,
+      data: Object.fromEntries(sites.map(s => {
+        const c = unreadCache.get(s.site_id);
+        return [s.site_id, c ? c.unread : null];
+      }))
+    };
+  });
+
   // generic API proxy to a site (for health/stats in panel UI)
   app.all('/proxy/:siteId/*', { preHandler: [app.auth] }, async (req, reply) => {
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
