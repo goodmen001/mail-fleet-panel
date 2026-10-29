@@ -152,10 +152,12 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   if (zone.length) {
     siteUrl = `https://${domain}`;
     step('绑定自定义域名');
+    // override a domain left over from an earlier deploy of the same hostname
     await cf(headers, 'PUT', `/accounts/${accountId}/workers/domains`,
-      { zone_id: zone[0].id, hostname: domain, service: workerName, environment: 'production' }).catch(e => step(`域名绑定提示: ${e.message}`));
+      { zone_id: zone[0].id, hostname: domain, service: workerName, environment: 'production', override_existing_origin: true }).catch(e => step(`域名绑定提示: ${e.message}`));
     step('配置 Email Routing catch-all');
-    await cf(headers, 'PUT', `/zones/${zone[0].id}/email/routing/catch_all`, {
+    // NOTE: the catch-all rule lives under /rules/ — without it CF answers 404
+    await cf(headers, 'PUT', `/zones/${zone[0].id}/email/routing/rules/catch_all`, {
       matcher: { type: 'all' },
       actions: [{ type: 'worker', value: [workerName] }],
       enabled: true
@@ -174,12 +176,15 @@ export async function initDeployedSite(siteUrl, adminEmail, adminPassword, jwtSe
 
   // the custom domain was JUST attached — DNS/TLS can take a while to go
   // live, so retry the first contact with backoff before giving up
-  step('初始化站点数据库 (/init)');
+  // the worker's hono app is mounted under /api (index.js rewrites /api/* and
+  // delegates everything else to the SPA assets) — /init/:secret without the
+  // prefix returns index.html with HTTP 200, which silently skips DB creation
+  step('初始化站点数据库 (/api/init)');
   let initText = '', initRes;
   const wait = (ms) => new Promise(r => setTimeout(r, ms));
   for (let attempt = 1; attempt <= 6; attempt++) {
     try {
-      initRes = await fetch(`${base}/init/${jwtSecret}`);
+      initRes = await fetch(`${base}/api/init/${jwtSecret}`);
       initText = await initRes.text();
       if (initRes.ok && initText.includes('success')) break;
     } catch (e) {
