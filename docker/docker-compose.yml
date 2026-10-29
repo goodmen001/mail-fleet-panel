@@ -1,0 +1,15 @@
+services:
+  mail-fleet-panel:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: mail-fleet-panel
+    restart: unless-stopped
+    ports:
+      - "3300:3300"
+    environment:
+      - PANEL_SECRET=${PANEL_SECRET:-please-change-this-secret}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - WORKER_BUNDLE=/app/data/bundles/worker.zip
+    volumes:
+      - ./data:/app/data
