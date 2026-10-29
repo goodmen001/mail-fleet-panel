@@ -28,6 +28,19 @@
       </el-table>
     </div>
 
+    <!-- embedded console: panel proxies the site same-origin, so auto-login works -->
+    <div v-if="consoleSite" class="tech-card" style="margin-top:20px">
+      <div class="tech-title">
+        <Icon icon="mdi:monitor-dashboard"/>{{ consoleSite.name }} · 控制台
+        <span style="margin-left:auto;display:flex;gap:8px">
+          <el-button size="small" @click="reloadConsole">刷新</el-button>
+          <el-button size="small" @click="openNewTab(consoleSite)">新标签页打开</el-button>
+          <el-button size="small" type="danger" @click="consoleSite = null">关闭</el-button>
+        </span>
+      </div>
+      <iframe v-if="consoleUrl" :src="consoleUrl" class="console-frame" referrerpolicy="no-referrer"></iframe>
+    </div>
+
     <el-dialog v-model="addShow" title="接入 cloud-mail 站点" width="480">
       <el-form label-width="100px">
         <el-form-item label="名称"><el-input v-model="form.name" placeholder="例如：主力站"/></el-form-item>
@@ -91,14 +104,30 @@ async function checkAll() {
   ElMessage.success('体检完成')
 }
 
-// Open the site console in a NEW browser tab. Embedding the site in an iframe
-// does not work: cloud-mail keeps its token in the site origin's localStorage,
-// which a panel-origin page cannot write, and cross-origin iframes are blocked
-// by browser storage partitioning (blank page). A direct tab works fine —
-// the first login persists in the site origin.
+// Embedded console: the panel proxies the site same-origin under
+// /api/site/console/:siteId/ and injects the admin token into localStorage
+// before the site's app boots, so the iframe logs in automatically.
+const consoleSite = ref(null)
+const consoleUrl = ref('')
+
 async function openConsole(row) {
-  window.open(row.base_url + '/login', '_blank')
-  ElMessage.info(`已在新标签页打开 ${row.name} 控制台；首次登录后本浏览器会记住会话`)
+  try {
+    const { data } = await axios.post(`/site/console/prepare/${row.site_id}`)
+    consoleSite.value = row
+    consoleUrl.value = `/api/site/console/embed/${row.site_id}?key=${encodeURIComponent(data.data.key)}`
+    ElMessage.success(`已加载 ${row.name} 控制台（自动登录）`)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '打开控制台失败')
+  }
+}
+
+function reloadConsole() {
+  // re-issue key + token, reload the iframe
+  openConsole(consoleSite.value)
+}
+
+function openNewTab(row) {
+  window.open(row.base_url, '_blank')
 }
 
 // copy the stored admin password so the user can paste it once on the site login page
@@ -129,3 +158,14 @@ async function del(row) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+.console-frame {
+  width: 100%;
+  height: calc(100vh - 220px);
+  min-height: 480px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+  border-radius: 8px;
+  background: #fff;
+}
+</style>

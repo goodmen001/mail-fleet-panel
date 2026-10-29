@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.js';
 import credRoutes from './routes/credential.js';
 import deployRoutes from './routes/deploy.js';
 import siteRoutes from './routes/site.js';
+import consoleProxy from './routes/console-proxy.js';
 import versionRoutes from './routes/version.js';
 import userRoutes from './routes/user.js';
 
@@ -37,6 +38,8 @@ await app.register(authRoutes, { prefix: '/api/auth' });
 await app.register(userRoutes, { prefix: '/api/user' });
 await app.register(credRoutes, { prefix: '/api/credential' });
 await app.register(deployRoutes, { prefix: '/api/deploy' });
+// console proxy first: its /:siteId/* wildcard must win over site routes
+await app.register(consoleProxy, { prefix: '/api/site/console' });
 await app.register(siteRoutes, { prefix: '/api/site' });
 await app.register(versionRoutes, { prefix: '/api/version' });
 

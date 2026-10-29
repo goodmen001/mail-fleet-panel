@@ -1,0 +1,198 @@
+// Same-origin embedded console: the panel serves the cloud-mail site's own
+// frontend (index.html + assets + /api) under /api/site/console/:siteId/* on
+// the PANEL origin, so the site code sees a same-origin iframe —
+// localStorage('token') injection works and the user is logged in
+// automatically.
+//
+// Why not a plain cross-origin iframe: browsers partition storage for
+// third-party iframes, so the site inside could not read the token we set.
+//
+// Auth: the iframe cannot send the panel's JWT header, so the embed URL
+// carries a short-lived HMAC key (issued by an authed endpoint). Loading it
+// sets an HttpOnly cookie; subsequent asset/api proxy calls verify key or
+// cookie — no anonymous access to the proxied admin API.
+import db, { decrypt } from '../db/index.js';
+import crypto from 'node:crypto';
+
+const SECRET = process.env.PANEL_SECRET || 'change-me-in-production';
+const EMBED_TTL_MS = 10 * 60 * 1000;
+const COOKIE_TTL_S = 2 * 60 * 60;
+
+const sign = (payload) =>
+  crypto.createHmac('sha256', SECRET).update(payload).digest('base64url');
+
+// payload: `${siteId}:${expiresAtMs}`  →  payload.signature
+function makeKey(siteId, ttl = EMBED_TTL_MS) {
+  const exp = Date.now() + ttl;
+  const payload = `${siteId}:${exp}`;
+  return `${payload}.${sign(payload)}`;
+}
+
+function checkKey(siteId, key) {
+  if (!key) return false;
+  const [payload, sig] = key.split('.');
+  if (!payload || !sig) return false;
+  const [id, exp] = payload.split(':');
+  if (Number(id) !== Number(siteId)) return false;
+  if (Number(exp) < Date.now()) return false;
+  const expect = sign(payload);
+  return sig.length === expect.length &&
+    crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expect));
+}
+
+function authorized(req, siteId) {
+  if (checkKey(siteId, req.query.key)) return true;
+  const cookie = (req.headers.cookie || '')
+    .split(';').map(s => s.trim()).find(s => s.startsWith('cmconsole='));
+  return checkKey(siteId, cookie?.slice('cmconsole='.length));
+}
+
+// top-level static roots/files referenced by the built index.html / app code
+const STATIC_PREFIXES = ['assets', 'image', 'fonts', 'tinymce',
+  'mail.png', 'mail-pwa.png', 'manifest.webmanifest', 'registerSW.js',
+  'sw.js', 'workbox-', 'content.css'];
+
+async function siteLogin(site) {
+  const res = await fetch(`${site.base_url}/api/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: site.admin_email, password: decrypt(site.admin_password_enc) })
+  });
+  const j = await res.json().catch(() => null);
+  if (j?.code !== 200) throw new Error(j?.message || `登录失败(HTTP ${res.status})`);
+  return j.data.token;
+}
+
+async function getToken(site) {
+  try {
+    const token = await siteLogin(site);
+    db.prepare("UPDATE site SET status='online', last_check=datetime('now'), jwt_cache=? WHERE site_id=?")
+      .run(token, site.site_id);
+    return token;
+  } catch (e) {
+    // fall back to cached token; may still work briefly
+    db.prepare("UPDATE site SET status='offline', last_check=datetime('now') WHERE site_id=?").run(site.site_id);
+    if (site.jwt_cache) return site.jwt_cache;
+    throw e;
+  }
+}
+
+// rewrite absolute root paths in the site's index.html to the embed prefix and
+// inject the token into localStorage BEFORE the app bundle runs
+function rewriteHtml(html, prefix, token, error) {
+  let out = html;
+  if (error) {
+    const inject = `<body style="font-family:sans-serif;background:#141414;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="text-align:center"><p style="font-size:15px">${error}</p><p style="font-size:12px;opacity:.6">请检查站点地址是否可达，或稍后重试</p></div></body>`;
+    return html.slice(0, Math.max(html.indexOf('</body>'), 0)) + inject;
+  }
+  // prefix quoted absolute refs in html
+  for (const p of STATIC_PREFIXES) {
+    out = out.split(`"/${p}`).join(`"${prefix}/${p}`);
+  }
+  // safety net for unquoted / attribute-less occurrences
+  out = out.replace(/(src|href)=\/(assets|image|fonts|tinymce)/g, `$1=${prefix}/$2`);
+  const inject = `<script>
+try{
+  localStorage.setItem('token', ${JSON.stringify(token)});
+  if(!localStorage.getItem('ui')) localStorage.setItem('ui', JSON.stringify({dark:true}));
+}catch(e){}
+</script>`;
+  return out.replace('</head>', `${inject}</head>`);
+}
+
+export default async function (app) {
+  // issue a short-lived embed key (authed, from the panel UI)
+  app.post('/prepare/:siteId', { preHandler: [app.auth] }, async (req, reply) => {
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(Number(req.params.siteId) || 0);
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    return { code: 200, data: { key: makeKey(site.site_id), expiresIn: EMBED_TTL_MS } };
+  });
+
+  // ---- console shell ----
+  app.get('/embed/:siteId', async (req, reply) => {
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(Number(req.params.siteId) || 0);
+    if (!site) return reply.code(404).type('text/plain').send('站点不存在');
+    if (!authorized(req, site.site_id)) return reply.code(403).type('text/plain').send('嵌入凭证无效或已过期，请在面板中重新打开控制台');
+    // refresh the signed cookie so long sessions keep working
+    reply.header('Set-Cookie', `cmconsole=${makeKey(site.site_id, COOKIE_TTL_S * 1000)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_TTL_S}`);
+    let token = null, error = null;
+    try { token = await getToken(site); } catch (e) { error = '站点登录失败：' + e.message; }
+    let html = '';
+    if (!error) {
+      try {
+        const res = await fetch(site.base_url + '/');
+        html = await res.text();
+        if (!html) error = '站点返回空页面';
+      } catch (e) { error = '无法访问站点：' + e.message; }
+    }
+    const prefix = `/api/site/console/${site.site_id}`;
+    reply.type('text/html; charset=utf-8');
+    reply.header('Content-Security-Policy', "frame-ancestors 'self'");
+    return rewriteHtml(html, prefix, token, error);
+  });
+
+  // ---- static assets proxy (SPA fallback for navigation paths) ----
+  app.get('/:siteId/*', async (req, reply) => {
+    const siteId = Number(req.params.siteId) || 0;
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
+    if (!site) return reply.code(404).send('站点不存在');
+    if (!authorized(req, siteId)) return reply.code(403).type('text/plain').send('嵌入凭证无效或已过期，请在面板中重新打开控制台');
+    const rel = req.params['*'];
+    let res;
+    try {
+      res = await fetch(site.base_url + '/' + rel, { headers: { Accept: req.headers.accept || '*/*' } });
+    } catch (e) {
+      return reply.code(502).type('text/plain').send('站点不可达: ' + e.message);
+    }
+    const prefix = `/api/site/console/${siteId}`;
+    const ct = res.headers.get('content-type') || '';
+    // cloud-mail's SPA fallback returns 200 index.html for navigation paths —
+    // rewrite ANY html response so asset refs keep hitting the proxy
+    if (ct.includes('text/html')) {
+      const html = await res.text();
+      reply.type('text/html; charset=utf-8');
+      return rewriteHtml(html, prefix, site.jwt_cache || '', null);
+    }
+    if (ct) reply.type(ct);
+    return reply.send(res.body);
+  });
+
+  // ---- site API proxy (Authorization attached server-side) ----
+  app.all('/:siteId/api/*', async (req, reply) => {
+    const siteId = Number(req.params.siteId) || 0;
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    if (!authorized(req, siteId)) return reply.code(403).send({ code: 403, message: '嵌入凭证无效或已过期，请在面板中重新打开控制台' });
+    const rel = req.params['*'];
+    // forward the query string but strip our signed key
+    const params = new URLSearchParams(req.raw.url.split('?')[1] || '');
+    params.delete('key');
+    const qs = params.toString() ? '?' + params.toString() : '';
+    const call = (token) => fetch(`${site.base_url}/api/${rel}${qs}`, {
+      method: req.method,
+      headers: {
+        'Content-Type': req.headers['content-type'] || 'application/json',
+        Authorization: `Bearer ${token}`
+      },
+      body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body ?? {})
+    });
+    let token = site.jwt_cache || '';
+    let res;
+    try { res = await call(token); } catch (e) {
+      return reply.code(502).send({ code: 502, message: '站点不可达: ' + e.message });
+    }
+    if (res.status === 401) {
+      try {
+        token = await getToken(site);
+        res = await call(token);
+      } catch { /* keep original 401 response */ }
+    }
+    reply.code(res.status);
+    const text = await res.text();
+    if (res.headers.get('content-type')?.includes('json')) {
+      try { return JSON.parse(text); } catch { return text; }
+    }
+    reply.type('text/plain; charset=utf-8');
+    return text;
+  });
+}
