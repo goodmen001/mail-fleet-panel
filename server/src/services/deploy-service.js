@@ -85,13 +85,19 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   // 4. assets upload session
   step('上传静态资源');
   const manifest = buildAssetManifest(workerDistDir);
+  step(`静态资源 ${Object.keys(manifest).length} 个文件`);
   const session = await cf(headers, 'POST', `/accounts/${accountId}/workers/scripts/${workerName}/assets-upload-session`, { manifest });
   let completionJwt = session.jwt;
-  const missing = session.buckets.flat();
+  const missing = (session.buckets || []).flat();
   if (missing.length) {
+    step(`需上传 ${missing.length} 个资源文件`);
+    // hash → path index (case-insensitive compare, CF sometimes normalizes case)
+    const byHash = new Map();
+    for (const k of Object.keys(manifest)) byHash.set(manifest[k].hash.toLowerCase(), k.slice(1));
     const form = new FormData();
     for (const entry of missing) {
-      const relPath = Object.keys(manifest).find(k => manifest[k].hash === entry.hash).slice(1);
+      const relPath = byHash.get(String(entry.hash).toLowerCase());
+      if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
       const buf = fs.readFileSync(path.join(workerDistDir, relPath));
       form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
     }

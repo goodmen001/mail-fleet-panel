@@ -45,8 +45,13 @@ export default async function (app) {
       }
     }
 
-    // worker entry + assets dir ship next to the exe (data/worker-dist)
-    const workerDist = process.env.WORKER_DIST || path.join(path.dirname(process.execPath), 'data', 'worker-dist');
+    // worker entry + assets dir ship with the installation:
+    //   exe (SEA) mode: data/worker-dist next to the exe
+    //   docker/node mode: /app/data/worker-dist (WORKER_DIST or cwd)
+    const workerDist = process.env.WORKER_DIST
+      || (process.env.PANEL_SEA
+        ? path.join(path.dirname(process.execPath), 'data', 'worker-dist')
+        : path.join(process.cwd(), 'data', 'worker-dist'));
     if (!fs.existsSync(workerDist) || !fs.existsSync(path.join(workerDist, 'worker.js'))) {
       return reply.code(400).send({ code: 400, message: '部署包缺失：exe 旁的 data/worker-dist 目录需包含 worker.js 和静态资源（请重新解压完整安装包）' });
     }

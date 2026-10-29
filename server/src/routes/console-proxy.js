@@ -70,9 +70,9 @@ async function getToken(site) {
       .run(token, site.site_id);
     return token;
   } catch (e) {
-    // fall back to cached token; may still work briefly
     db.prepare("UPDATE site SET status='offline', last_check=datetime('now') WHERE site_id=?").run(site.site_id);
-    if (site.jwt_cache) return site.jwt_cache;
+    // no silent fallback to a cached token: an expired one makes the embedded
+    // console show "身份认证失效" with no way to log in inside the iframe
     throw e;
   }
 }
@@ -192,12 +192,20 @@ export default async function (app) {
       },
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body ?? {})
     });
-    let token = site.jwt_cache || '';
+    // always use a fresh site token: cached ones expire and the embedded UI
+    // would show "身份认证失效" with no way to re-login inside the iframe
+    let token;
+    try {
+      token = await getToken(site);
+    } catch (e) {
+      return reply.code(502).send({ code: 502, message: '站点登录失败: ' + e.message });
+    }
     let res;
     try { res = await call(token); } catch (e) {
       return reply.code(502).send({ code: 502, message: '站点不可达: ' + e.message });
     }
     if (res.status === 401) {
+      // token may have been revoked mid-session — one relogin + retry
       try {
         token = await getToken(site);
         res = await call(token);

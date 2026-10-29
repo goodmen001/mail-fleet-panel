@@ -10,17 +10,19 @@ echo "[1/3] building web dist..."
 (cd web && npm run build)
 
 echo "[2/3] bundling server + applying exe patches..."
-(cd server && node -e "const es=require('/tmp/postject/node_modules/esbuild'); es.build({entryPoints:['src/index.js'],bundle:true,platform:'node',format:'cjs',outfile:'/tmp/sea/winpkg/panel.cjs',supported:{'import-meta':false},inject:['/tmp/sea/dirname-shim.js'],logLevel:'silent'})")
+(cd server && node -e "const es=require('/tmp/postject/node_modules/esbuild'); es.build({entryPoints:['src/index.js'],bundle:true,platform:'node',format:'cjs',outfile:'/tmp/sea/winpkg/panel.cjs',supported:{'import-meta':false},inject:['/tmp/sea/dirname-shim.js'],define:{'process.env.PANEL_SEA':'\"1\"','import.meta.url':'\"file:///app/index.js\"'},logLevel:'silent'})")
 python3 /tmp/sea/patch.py
 
 echo "[3/4] staging worker deploy bundle (data/worker-dist)..."
-# worker.js: wrangler dry-run bundle of cloud-mail mail-worker (ESM, self-contained)
+# worker.js: wrangler dry-run bundle of cloud-mail mail-worker (ESM, self-contained);
+# static assets: mail-worker's built frontend. Refresh the repo copy (docker build
+# context) and the winpkg copy from the same build.
 (cd /cloudmail/cloud-mail/mail-worker && npx wrangler deploy --dry-run --outdir /tmp/worker-bundle >/dev/null)
-rm -rf /tmp/sea/winpkg/data/worker-dist
-mkdir -p /tmp/sea/winpkg/data/worker-dist
-cp /tmp/worker-bundle/index.js /tmp/sea/winpkg/data/worker-dist/worker.js
-# static assets: mail-worker's built frontend (index.html + assets/...)
-cp -r /cloudmail/cloud-mail/mail-worker/dist/. /tmp/sea/winpkg/data/worker-dist/
+rm -rf data/worker-dist /tmp/sea/winpkg/data/worker-dist
+mkdir -p data/worker-dist /tmp/sea/winpkg/data/worker-dist
+cp /tmp/worker-bundle/index.js data/worker-dist/worker.js
+cp -r /cloudmail/cloud-mail/mail-worker/dist/. data/worker-dist/
+cp -r data/worker-dist/. /tmp/sea/winpkg/data/worker-dist/
 test -f /tmp/sea/winpkg/data/worker-dist/worker.js
 test -f /tmp/sea/winpkg/data/worker-dist/index.html
 

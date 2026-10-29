@@ -2,15 +2,20 @@
   <div>
     <div class="tech-card">
       <div class="tech-title"><Icon icon="mdi:key-chain"/>Cloudflare 凭证库</div>
-      <el-button type="primary" size="small" @click="credShow = true" v-if="isAdmin" style="margin-bottom:12px">添加凭证</el-button>
+      <el-button type="primary" size="small" @click="openAddCred" v-if="isAdmin" style="margin-bottom:12px">添加凭证</el-button>
       <el-table :data="creds" size="small">
         <el-table-column prop="name" label="名称" width="150"/>
         <el-table-column prop="kind" label="类型" width="100">
           <template #default="{row}">{{ row.kind === 'token' ? 'API Token' : 'Global Key' }}</template>
         </el-table-column>
-        <el-table-column prop="account_id" label="Account ID" min-width="200"/>
-        <el-table-column label="操作" width="80">
-          <template #default="{row}"><el-button size="small" type="danger" link @click="delCred(row)" v-if="isAdmin">删除</el-button></template>
+        <el-table-column prop="accountId" label="Account ID" min-width="200">
+          <template #default="{row}">{{ row.accountId || '—' }}</template>
+        </el-table-column>
+        <el-table-column label="操作" width="120">
+          <template #default="{row}">
+            <el-button size="small" type="primary" link @click="editCred(row)" v-if="isAdmin">编辑</el-button>
+            <el-button size="small" type="danger" link @click="delCred(row)" v-if="isAdmin">删除</el-button>
+          </template>
         </el-table-column>
       </el-table>
     </div>
@@ -90,24 +95,26 @@
       </el-table>
     </div>
 
-    <el-dialog v-model="credShow" title="添加 Cloudflare 凭证" width="480">
+    <el-dialog v-model="credShow" :title="editingCred ? '编辑 Cloudflare 凭证' : '添加 Cloudflare 凭证'" width="480">
       <el-form label-width="110px">
         <el-form-item label="名称"><el-input v-model="credForm.name" placeholder="例如：主账号Token"/></el-form-item>
-        <el-form-item label="类型">
+        <el-form-item v-if="!editingCred" label="类型">
           <el-radio-group v-model="credForm.kind">
             <el-radio value="token">API Token（推荐）</el-radio>
             <el-radio value="global_key">Global API Key</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="Token/Key"><el-input v-model="credForm.token" type="password" show-password/></el-form-item>
+        <el-form-item :label="editingCred ? '新Token/Key' : 'Token/Key'">
+          <el-input v-model="credForm.token" type="password" show-password :placeholder="editingCred ? '留空表示不修改凭证' : ''"/>
+        </el-form-item>
         <el-form-item v-if="credForm.kind === 'global_key'" label="注册邮箱">
           <el-input v-model="credForm.authEmail" placeholder="Cloudflare 账号登录邮箱（Global Key 必填）"/>
         </el-form-item>
-        <el-form-item label="Account ID"><el-input v-model="credForm.accountId" placeholder="可留空，部署时再填"/></el-form-item>
+        <el-form-item label="Account ID"><el-input v-model="credForm.accountId" placeholder="可留空，保存时自动从 Cloudflare 获取"/></el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="credShow = false">取消</el-button>
-        <el-button type="primary" @click="addCred">保存并校验</el-button>
+        <el-button type="primary" @click="saveCred">{{ editingCred ? '保存修改' : '保存并校验' }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -122,6 +129,7 @@ import axios from 'axios'
 const creds = ref([])
 const records = ref([])
 const credShow = ref(false)
+const editingCred = ref(null)
 const deploying = ref(false)
 const credForm = ref({ name: '', kind: 'token', token: '', accountId: '', authEmail: '' })
 const me = JSON.parse(localStorage.getItem('panel_user') || '{}')
@@ -166,11 +174,29 @@ async function load() {
   records.value = r.data.data
 }
 
-async function addCred() {
+function openAddCred() {
+  editingCred.value = null
+  credForm.value = { name: '', kind: 'token', token: '', accountId: '', authEmail: '' }
+  credShow.value = true
+}
+
+function editCred(row) {
+  editingCred.value = row
+  credForm.value = { name: row.name, kind: row.kind, token: '', accountId: row.accountId || '', authEmail: row.authEmail || '' }
+  credShow.value = true
+}
+
+async function saveCred() {
   try {
-    await axios.post('/credential/add', credForm.value)
-    ElMessage.success('凭证已保存')
+    if (editingCred.value) {
+      await axios.put('/credential/edit', { ...credForm.value, credId: editingCred.value.credId })
+      ElMessage.success('凭证已更新')
+    } else {
+      await axios.post('/credential/add', credForm.value)
+      ElMessage.success('凭证已保存')
+    }
     credShow.value = false
+    editingCred.value = null
     credForm.value = { name: '', kind: 'token', token: '', accountId: '', authEmail: '' }
     load()
   } catch (e) {

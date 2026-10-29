@@ -10,6 +10,5 @@ services:
     environment:
       - PANEL_SECRET=${PANEL_SECRET:-please-change-this-secret}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
-      - WORKER_BUNDLE=/app/data/bundles/worker.zip
     volumes:
       - ./data:/app/data
