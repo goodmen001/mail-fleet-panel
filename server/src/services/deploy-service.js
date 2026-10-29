@@ -118,7 +118,7 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
     compatibility_date: '2025-06-04',
     bindings: [
       { type: 'd1', id: db.uuid, name: 'db' },
-      { type: 'kv_namespace', id: kv.id, name: 'kv' },
+      { type: 'kv_namespace', namespace_id: kv.id, name: 'kv' },
       ...(r2 ? [{ type: 'r2_bucket', bucket_name: r2.name, name: 'r2' }] : []),
       { type: 'send_email', name: 'forward' },
       { type: 'ai', name: 'ai' },

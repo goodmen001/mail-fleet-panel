@@ -93,11 +93,19 @@ function rewriteHtml(html, prefix, token, error) {
   out = out.replace(/(src|href)=\/(assets|image|fonts|tinymce)/g, `$1=${prefix}/$2`);
   const inject = `<script>
 try{
-  localStorage.setItem('token', ${JSON.stringify(token)});
+  // the site registers a service worker at scope "/" on our origin — that
+  // would intercept the PANEL's own requests; disable SW inside the embed
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register = () => Promise.resolve();
+  ${token ? `localStorage.setItem('token', ${JSON.stringify(token)});` : `localStorage.removeItem('token');`}
   if(!localStorage.getItem('ui')) localStorage.setItem('ui', JSON.stringify({dark:true}));
 }catch(e){}
 </script>`;
-  return out.replace('</head>', `${inject}</head>`);
+  // vue-router's createWebHistory() (no base arg) falls back to the <base href>
+  // element — injecting it routes the site's SPA under our embed prefix
+  // without touching the bundle; refresh also keeps working since absolute
+  // proxy paths still resolve.
+  const baseTag = `<base href="${prefix}/">`;
+  return out.replace('</head>', `${baseTag}${inject}</head>`);
 }
 
 // the site's axios is built with a relative baseURL "/api" — inside the embed
