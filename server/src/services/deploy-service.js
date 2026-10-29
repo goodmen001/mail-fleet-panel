@@ -21,7 +21,11 @@ async function cf(headers, method, pathName, body, isForm = false) {
     headers: isForm ? headers : { ...headers, 'Content-Type': 'application/json' },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
   });
-  const j = await res.json();
+  const text = await res.text();
+  let j;
+  try { j = JSON.parse(text); } catch {
+    throw new Error(`CF API ${pathName}: 响应非 JSON (HTTP ${res.status}): ${text.slice(0, 120)}`);
+  }
   if (!j.success) throw new Error(`CF API ${pathName}: ${j.errors?.map(e => e.message).join('; ') || res.status}`);
   return j.result;
 }
@@ -168,10 +172,27 @@ export async function initDeployedSite(siteUrl, adminEmail, adminPassword, jwtSe
   const step = (msg) => onStep?.(msg);
   const base = siteUrl.replace(/\/+$/, '');
 
+  // the custom domain was JUST attached — DNS/TLS can take a while to go
+  // live, so retry the first contact with backoff before giving up
   step('初始化站点数据库 (/init)');
-  const initRes = await fetch(`${base}/init/${jwtSecret}`).catch(e => { throw new Error('初始化请求失败: ' + e.message); });
-  const initText = await initRes.text();
-  if (!initRes.ok || !initText.includes('success')) throw new Error(`初始化失败: HTTP ${initRes.status} ${initText.slice(0, 100)}`);
+  let initText = '', initRes;
+  const wait = (ms) => new Promise(r => setTimeout(r, ms));
+  for (let attempt = 1; attempt <= 6; attempt++) {
+    try {
+      initRes = await fetch(`${base}/init/${jwtSecret}`);
+      initText = await initRes.text();
+      if (initRes.ok && initText.includes('success')) break;
+    } catch (e) {
+      initText = e.message;
+    }
+    if (attempt < 6) {
+      step(`站点尚未就绪，${10 * attempt} 秒后重试 (${attempt}/5)：${String(initText).slice(0, 60)}`);
+      await wait(10000 * attempt);
+    }
+  }
+  if (!initRes || !initRes.ok || !initText.includes('success')) {
+    throw new Error(`初始化失败: ${initRes ? 'HTTP ' + initRes.status + ' ' : ''}${String(initText).slice(0, 100)}`);
+  }
 
   // registration switch is open by default after init (setting.register = 0 open)
   step(`注册管理员 ${adminEmail}`);

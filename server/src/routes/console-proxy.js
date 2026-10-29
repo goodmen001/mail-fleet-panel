@@ -129,37 +129,31 @@ export default async function (app) {
   });
 
   // ---- console shell ----
+  // The embed URL lives OUTSIDE the proxy prefix, so vue-router (whose base
+  // comes from the injected <base href>) would resolve it to "/embed/:id" and
+  // show its 404 page. Instead: set the auth cookie, then bounce the iframe
+  // to the prefix root — there the router sees "/" and boots normally.
   app.get('/embed/:siteId', async (req, reply) => {
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(Number(req.params.siteId) || 0);
+    const siteId = Number(req.params.siteId) || 0;
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
     if (!site) return reply.code(404).type('text/plain').send('站点不存在');
     if (!authorized(req, site.site_id)) return reply.code(403).type('text/plain').send('嵌入凭证无效或已过期，请在面板中重新打开控制台');
     // refresh the signed cookie so long sessions keep working
     reply.header('Set-Cookie', `cmconsole=${makeKey(site.site_id, COOKIE_TTL_S * 1000)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_TTL_S}`);
-    let token = null, error = null;
-    try { token = await getToken(site); } catch (e) {
-      // stored credentials failed — still serve the site's own page so the
-      // user can log in manually inside the console (login API is auth-free)
-      token = null;
-    }
-    let html = '';
-    try {
-      const res = await fetch(site.base_url + '/');
-      html = await res.text();
-      if (!html) error = '站点返回空页面';
-    } catch (e) { error = '无法访问站点：' + e.message; }
-    const prefix = `/api/site/console/${site.site_id}`;
-    reply.type('text/html; charset=utf-8');
-    reply.header('Content-Security-Policy', "frame-ancestors 'self'");
-    return rewriteHtml(html, prefix, token, error);
+    return reply.redirect(`/api/site/console/${site.site_id}/`, 302);
   });
 
   // ---- static assets proxy (SPA fallback for navigation paths) ----
-  app.get('/:siteId/*', async (req, reply) => {
+  // "/" and any navigation path return the site's index.html rewritten for
+  // the embed; the injected <base href> anchors vue-router and relative URLs
+  app.get('/:siteId', async (req, reply) => serveAsset(req, reply, ''));
+  app.get('/:siteId/*', async (req, reply) => serveAsset(req, reply, req.params['*']));
+
+  async function serveAsset(req, reply, rel) {
     const siteId = Number(req.params.siteId) || 0;
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
     if (!site) return reply.code(404).send('站点不存在');
     if (!authorized(req, siteId)) return reply.code(403).type('text/plain').send('嵌入凭证无效或已过期，请在面板中重新打开控制台');
-    const rel = req.params['*'];
     let res;
     try {
       res = await fetch(site.base_url + '/' + rel, { headers: { Accept: req.headers.accept || '*/*' } });
@@ -169,19 +163,26 @@ export default async function (app) {
     const prefix = `/api/site/console/${siteId}`;
     const ct = res.headers.get('content-type') || '';
     // cloud-mail's SPA fallback returns 200 index.html for navigation paths —
-    // rewrite ANY html response so asset refs keep hitting the proxy
+    // rewrite ANY html response so asset refs keep hitting the proxy.
+    // Fresh token per navigation: cached ones expire and the embedded UI
+    // would show "身份认证失效" (login API is auth-free, so manual login
+    // still works if the panel's stored credentials are stale).
     if (ct.includes('text/html')) {
       const html = await res.text();
+      let token = null;
+      try { token = await getToken(site); } catch { token = null; }
       reply.type('text/html; charset=utf-8');
-      return rewriteHtml(html, prefix, site.jwt_cache || '', null);
+      reply.header('Content-Security-Policy', "frame-ancestors 'self'");
+      return rewriteHtml(html, prefix, token, null);
     }
     if (ct) reply.type(ct);
     if (ct.includes('javascript')) {
       const code = await res.text();
-      return rewriteJs(code, prefix);
+      // neutralize the site's service worker when served through the embed
+      return rewriteJs(code.replace('navigator.serviceWorker.register', 'false&&navigator.serviceWorker.register'), prefix);
     }
     return reply.send(res.body);
-  });
+  }
 
   // ---- site API proxy (Authorization attached server-side) ----
   app.all('/:siteId/api/*', async (req, reply) => {
