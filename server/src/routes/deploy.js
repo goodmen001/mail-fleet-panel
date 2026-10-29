@@ -1,5 +1,7 @@
 import db, { encrypt } from '../db/index.js';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { deployCloudMail, initDeployedSite } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
@@ -43,13 +45,19 @@ export default async function (app) {
       }
     }
 
+    // worker entry + assets dir ship next to the exe (data/worker-dist)
+    const workerDist = process.env.WORKER_DIST || path.join(path.dirname(process.execPath), 'data', 'worker-dist');
+    if (!fs.existsSync(workerDist) || !fs.existsSync(path.join(workerDist, 'worker.js'))) {
+      return reply.code(400).send({ code: 400, message: '部署包缺失：exe 旁的 data/worker-dist 目录需包含 worker.js 和静态资源（请重新解压完整安装包）' });
+    }
+
     // run async, log steps; on success auto-register admin + add to site manager
     jobs.forEach(j => {
       const steps = [];
       const step = (msg) => steps.push({ t: Date.now(), msg });
       (async () => {
         step('开始部署 ' + j.domain);
-        const r = await deployCloudMail(j.headers, j.accountId, j.domain, j.adminEmail, step);
+        const r = await deployCloudMail(j.headers, j.accountId, j.domain, j.adminEmail, step, workerDist);
         if (r.siteUrl) {
           // initial admin password for the new site
           const adminPassword = crypto.randomBytes(9).toString('base64url');

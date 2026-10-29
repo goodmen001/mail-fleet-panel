@@ -100,6 +100,18 @@ try{
   return out.replace('</head>', `${inject}</head>`);
 }
 
+// the site's axios is built with a relative baseURL "/api" — inside the embed
+// that must hit our proxy (…/console/:siteId/api) instead of the panel origin
+const JS_REWRITES = [
+  [/baseURL:"\/api"/g, (prefix) => `baseURL:"${prefix}/api"`],
+  [/baseURL:"\/api\/"/g, (prefix) => `baseURL:"${prefix}/api/"`]
+];
+function rewriteJs(code, prefix) {
+  let out = code;
+  for (const [re, make] of JS_REWRITES) out = out.replace(re, make(prefix));
+  return out;
+}
+
 export default async function (app) {
   // issue a short-lived embed key (authed, from the panel UI)
   app.post('/prepare/:siteId', { preHandler: [app.auth] }, async (req, reply) => {
@@ -154,6 +166,10 @@ export default async function (app) {
       return rewriteHtml(html, prefix, site.jwt_cache || '', null);
     }
     if (ct) reply.type(ct);
+    if (ct.includes('javascript')) {
+      const code = await res.text();
+      return rewriteJs(code, prefix);
+    }
     return reply.send(res.body);
   });
 

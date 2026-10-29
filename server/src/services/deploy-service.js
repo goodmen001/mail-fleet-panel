@@ -1,24 +1,70 @@
 // Cloudflare deployment engine for cloud-mail
-// Ported from the manual wrangler/REST deploy flow.
+// Implements the same REST flow as `wrangler deploy` for a Worker with a
+// static assets directory:
+//   1. create D1 / KV / (optional) R2 resources
+//   2. assets-upload-session with a blake3 manifest of the assets dir
+//   3. upload missing asset files (base64) with the session JWT
+//   4. PUT the worker script (ESM module) with metadata that includes the
+//      completion JWT in `assets.jwt` and an `{name:'assets', type:'assets'}`
+//      binding, plus all plain_text vars / d1 / kv / r2 / ai / send_email
+//   5. attach the custom domain + email routing catch-all
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import blake3 from '../vendor/blake3-inline.cjs';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
-async function cf(headers, method, path, body, isForm = false) {
-  const res = await fetch(CF_API + path, {
+async function cf(headers, method, pathName, body, isForm = false) {
+  const res = await fetch(CF_API + pathName, {
     method,
     headers: isForm ? headers : { ...headers, 'Content-Type': 'application/json' },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
   });
   const j = await res.json();
-  if (!j.success) throw new Error(`CF API ${path}: ${j.errors?.map(e => e.message).join('; ') || res.status}`);
+  if (!j.success) throw new Error(`CF API ${pathName}: ${j.errors?.map(e => e.message).join('; ') || res.status}`);
   return j.result;
 }
 
-export async function deployCloudMail(headers, accountId, domain, adminEmail, onStep) {
+// blake3 hash identical to wrangler's: hash(base64(content) + extension).hex[0:32]
+function hashAssetFile(filepath) {
+  const contents = fs.readFileSync(filepath);
+  const ext = path.extname(filepath).substring(1);
+  const out = new Uint8Array(32);
+  blake3.hash(Buffer.from(contents.toString('base64') + ext, 'utf8'), out);
+  return Buffer.from(out).toString('hex').slice(0, 32);
+}
+
+function buildAssetManifest(dir) {
+  const manifest = {};
+  const walk = (rel) => {
+    for (const name of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+      const relPath = path.posix.join(rel, name.name);
+      if (name.isDirectory()) walk(relPath);
+      else if (!name.isSymbolicLink()) {
+        const full = path.join(dir, relPath);
+        manifest[relPath.replace(/\\/g, '/')] = { hash: hashAssetFile(full), size: fs.statSync(full).size };
+      }
+    }
+  };
+  walk('');
+  return manifest;
+}
+
+const MIME = {
+  '.html': 'text/html', '.js': 'application/javascript', '.mjs': 'application/javascript',
+  '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.webp': 'image/webp', '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+  '.webmanifest': 'application/manifest+json', '.txt': 'text/plain', '.map': 'application/json',
+  '.xml': 'application/xml', '.wasm': 'application/wasm'
+};
+
+export async function deployCloudMail(headers, accountId, domain, adminEmail, onStep, workerDistDir) {
   const step = (msg) => onStep?.(msg);
   const rnd = () => Math.random().toString(36).slice(2, 10);
-  const jwtSecret = crypto.randomBytes(16).toString("hex");
+  const jwtSecret = crypto.randomBytes(16).toString('hex');
+  const workerName = `cloud-mail-${rnd()}`;
 
   // 1. D1
   step('创建 D1 数据库');
@@ -35,47 +81,67 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
     r2 = await cf(headers, 'POST', `/accounts/${accountId}/r2/buckets`, { name: `cloud-mail-${rnd()}` });
   } catch { step('R2 创建跳过（可选）'); }
 
-  // 4. get source zip from GitHub (built worker bundle) — use the project's deploy API
-  step('获取 cloud-mail 源码包');
-  // We upload a prebuilt worker bundle. The panel keeps a built bundle at data/bundles/worker.zip
-  // and patches wrangler.jsonc with the new resource ids.
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const bundlePath = process.env.WORKER_BUNDLE || '/app/data/bundles/worker.zip';
-  if (!fs.existsSync(bundlePath)) throw new Error('未找到 worker 部署包，请先在版本中心构建/上传');
+  // 4. assets upload session
+  step('上传静态资源');
+  const manifest = buildAssetManifest(workerDistDir);
+  const session = await cf(headers, 'POST', `/accounts/${accountId}/workers/scripts/${workerName}/assets-upload-session`, { manifest });
+  let completionJwt = session.jwt;
+  const missing = session.buckets.flat();
+  if (missing.length) {
+    const form = new FormData();
+    for (const entry of missing) {
+      const relPath = Object.keys(manifest).find(k => manifest[k].hash === entry.hash);
+      const buf = fs.readFileSync(path.join(workerDistDir, relPath));
+      form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
+    }
+    const up = await fetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+      method: 'POST', headers: { ...headers, Authorization: `Bearer ${session.jwt}` }, body: form
+    });
+    const j = await up.json();
+    if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
+    completionJwt = j.result?.jwt || completionJwt;
+  }
 
-  // patch config inside bundle is handled by bundle-preparation step (version module)
-  // worker name for later management
-  const workerName = `cloud-mail-${rnd()}`;
-
+  // 5. bundle the worker entry and upload as ESM module with assets completion JWT
   step('上传 Worker');
-  const form = new FormData();
+  const workerJs = fs.readFileSync(path.join(workerDistDir, 'worker.js'));
   const metadata = {
-    main: 'worker.js',
-    compatibility_date: '2024-09-23',
+    main_module: 'worker.js',
+    compatibility_date: '2025-06-04',
     bindings: [
       { type: 'd1', id: db.uuid, name: 'db' },
       { type: 'kv_namespace', id: kv.id, name: 'kv' },
+      ...(r2 ? [{ type: 'r2_bucket', bucket_name: r2.name, name: 'r2' }] : []),
+      { type: 'send_email', name: 'forward' },
+      { type: 'ai', name: 'ai' },
+      { type: 'assets', name: 'assets' },
       { type: 'plain_text', name: 'domain', text: JSON.stringify([domain]) },
       { type: 'plain_text', name: 'admin', text: adminEmail },
       { type: 'plain_text', name: 'jwt_secret', text: jwtSecret },
-      { type: 'plain_text', name: 'r2domain', text: '' }
+      { type: 'plain_text', name: 'ai_model', text: '' },
+      { type: 'plain_text', name: 'analysis_cache', text: '' },
+      { type: 'plain_text', name: 'project_link', text: '' }
     ],
-    ...(r2 ? { bindings_extra: [] } : {})
+    keep_bindings: ['plain_text', 'json'],
+    assets: {
+      jwt: completionJwt,
+      config: { html_handling: 'auto-trailing-slash', not_found_handling: 'single-page-application', run_worker_first: true }
+    },
+    observability: { enabled: true }
   };
+  const form = new FormData();
   form.append('metadata', JSON.stringify(metadata));
-  form.append('file', new Blob([fs.readFileSync(bundlePath)]), 'worker.zip');
+  form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
   await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
 
-  step('绑定自定义域名');
-  // workers domain
+  // 6. custom domain + email routing
   let siteUrl = null;
   const zone = await cf(headers, 'GET', `/zones?name=${domain}`);
   if (zone.length) {
     siteUrl = `https://${domain}`;
+    step('绑定自定义域名');
     await cf(headers, 'PUT', `/accounts/${accountId}/workers/domains`,
       { zone_id: zone[0].id, hostname: domain, service: workerName, environment: 'production' }).catch(e => step(`域名绑定提示: ${e.message}`));
-    // email routing
     step('配置 Email Routing catch-all');
     await cf(headers, 'PUT', `/zones/${zone[0].id}/email/routing/catch_all`, {
       matcher: { type: 'all' },
