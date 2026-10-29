@@ -16,6 +16,7 @@ import userRoutes from './routes/user.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 });
 
+async function main() {
 await app.register(cors, { origin: true });
 await app.register(jwt, { secret: process.env.PANEL_SECRET || 'change-me-in-production' });
 
@@ -58,3 +59,5 @@ if (userCount === 0) {
 
 const port = Number(process.env.PORT || 3300);
 app.listen({ port, host: '0.0.0.0' }).then(() => app.log.info(`panel listening on ${port}`));
+}
+main();

@@ -92,7 +92,7 @@ async function add() {
 }
 
 async function check(row) {
-  const { data } = await axios.post(`/site/check/${row.siteId}`)
+  const { data } = await axios.post(`/site/check/${row.site_id}`)
   row.status = data.data.status
   ElMessage.info(row.status === 'online' ? '在线' : '离线')
 }
@@ -100,7 +100,7 @@ async function check(row) {
 async function checkAll() {
   await Promise.all(sites.value.map(async s => {
     try {
-      const { data } = await axios.post(`/site/check/${s.siteId}`)
+      const { data } = await axios.post(`/site/check/${s.site_id}`)
       s.status = data.data.status
     } catch { s.status = 'offline' }
   }))
@@ -113,9 +113,9 @@ async function openConsole(row) {
   iframeTip.value = ''
   iframeUrl.value = ''
   try {
-    const { data } = await axios.post(`/site/console/${row.siteId}/token`)
+    await axios.post(`/site/console/${row.site_id}/token`)
     // auto-login via localStorage injection page, then embed the site
-    iframeUrl.value = `${location.origin}/api/site/console/${row.siteId}/console.html`
+    iframeUrl.value = `${location.origin}/api/site/console/${row.site_id}/console.html`
   } catch (e) {
     iframeTip.value = '获取站点会话失败：' + (e.response?.data?.message || e.message)
   } finally { iframeLoading.value = false }
@@ -123,9 +123,9 @@ async function openConsole(row) {
 
 async function del(row) {
   await ElMessageBox.confirm(`确定移除站点「${row.name}」？`, '提示', { type: 'warning' })
-  await axios.delete('/site/delete', { params: { siteId: row.siteId } })
+  await axios.delete('/site/delete', { params: { siteId: row.site_id } })
   ElMessage.success('已移除')
-  if (consoleSite.value?.siteId === row.siteId) consoleSite.value = null
+  if (consoleSite.value?.site_id === row.site_id) consoleSite.value = null
   load()
 }
 

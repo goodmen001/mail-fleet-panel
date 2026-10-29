@@ -64,7 +64,7 @@ export default async function (app) {
   // proxy: get a fresh token for iframe auto-login
   app.post('/console/:siteId/token', { preHandler: [app.auth] }, async (req, reply) => {
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send({ code: 404 });
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
     try {
       const token = await siteLogin(site);
       return { code: 200, data: { token, baseUrl: site.base_url } };
@@ -89,7 +89,7 @@ export default async function (app) {
   // generic API proxy to a site (for health/stats in panel UI)
   app.all('/proxy/:siteId/*', { preHandler: [app.auth] }, async (req, reply) => {
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send({ code: 404 });
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
     let token = site.jwt_cache;
     const target = site.base_url + '/' + req.params['*'] + (req.raw.url.includes('?') ? '?' + req.raw.url.split('?')[1] : '');
     const res = await fetch(target, {

@@ -44,6 +44,24 @@ export default async function (app) {
     return { code: 200, message: '已删除' };
   });
 
+  // auto-fetch domains (zones) under a credential, to feed the deploy center
+  app.get('/zones', { preHandler: [app.auth] }, async (req, reply) => {
+    const credId = req.query.credId;
+    const headers = app.getCredentialHeaders(credId);
+    if (!headers) return reply.code(404).send({ code: 404, message: '凭证不存在' });
+    const accountId = app.getAccountId(credId);
+    try {
+      let url = 'https://api.cloudflare.com/client/v4/zones?per_page=50';
+      if (accountId) url += `&account.id=${accountId}`;
+      const res = await fetch(url, { headers });
+      const j = await res.json();
+      if (!j.success) return reply.code(502).send({ code: 502, message: '拉取域名失败: ' + (j.errors?.[0]?.message || res.status) });
+      return { code: 200, data: j.result.map(z => ({ name: z.name, status: z.status, accountId: z.account?.id, accountName: z.account?.name })) };
+    } catch (e) {
+      return reply.code(502).send({ code: 502, message: '无法连接 Cloudflare: ' + e.message });
+    }
+  });
+
   // internal helper for other modules
   app.getCredentialHeaders = (credId) => {
     const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(credId);
