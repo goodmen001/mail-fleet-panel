@@ -5,12 +5,14 @@ function maskSite(s) {
 }
 
 async function siteLogin(site) {
-  const res = await fetch(`${site.base_url}/api/user/login`, {
+  const res = await fetch(`${site.base_url}/api/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: site.admin_email, password: decrypt(site.admin_password_enc) })
   });
-  const j = await res.json();
+  const text = await res.text();
+  let j;
+  try { j = JSON.parse(text); } catch { throw new Error(`站点响应异常(HTTP ${res.status})，请检查地址是否正确`); }
   if (j.code !== 200) throw new Error(j.message || '登录失败');
   return j.data.token;
 }
