@@ -73,17 +73,20 @@ export default async function (app) {
     }
   });
 
-  // auto-login bridge page: sets site token in localStorage then redirects inside iframe
-  app.get('/console/:siteId/console.html', { preHandler: [app.auth] }, async (req, reply) => {
+  // NOTE: no iframe auto-login bridge here. Cloud-mail reads its token from the
+  // site origin's own localStorage, so a panel-origin bridge page cannot inject
+  // it, and cross-origin iframes are blocked by browser storage partitioning.
+  // The console opens the site directly in a new tab instead (see Sites.vue).
+
+  // reveal admin password (for manual login on the site console)
+  app.get('/password/:siteId', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send();
-    let token;
-    try { token = await siteLogin(site); } catch (e) { return reply.code(502).send('site login failed'); }
-    db.prepare('UPDATE site SET jwt_cache=? WHERE site_id=?').run(token, site.site_id);
-    reply.type('text/html').send(`<!DOCTYPE html><html><body><script>
-      try { localStorage.setItem('token', ${JSON.stringify(token)}); } catch(e) {}
-      location.replace(${JSON.stringify(site.base_url)});
-    <\/script></body></html>`);
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    try {
+      return { code: 200, data: { email: site.admin_email, password: decrypt(site.admin_password_enc) } };
+    } catch {
+      return reply.code(500).send({ code: 500, message: '密码解密失败' });
+    }
   });
 
   // generic API proxy to a site (for health/stats in panel UI)

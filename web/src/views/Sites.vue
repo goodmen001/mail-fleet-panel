@@ -17,27 +17,15 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240">
+        <el-table-column label="操作" width="280">
           <template #default="{row}">
             <el-button size="small" type="primary" @click="openConsole(row)">进入控制台</el-button>
+            <el-button size="small" @click="copyCred(row)" v-if="isAdmin">复制密码</el-button>
             <el-button size="small" @click="check(row)">体检</el-button>
             <el-button size="small" type="danger" @click="del(row)" v-if="isAdmin">移除</el-button>
           </template>
         </el-table-column>
       </el-table>
-    </div>
-
-    <div class="tech-card" v-if="consoleSite" style="margin-top:20px">
-      <div class="tech-title">
-        <Icon icon="mdi:monitor-dashboard"/>
-        {{ consoleSite.name }} 控制台
-        <el-tag size="small" effect="dark" type="success" style="margin-left:8px">原版界面内嵌</el-tag>
-        <el-button size="small" style="margin-left:auto" @click="consoleSite = null">关闭</el-button>
-      </div>
-      <div class="iframe-wrap" v-loading="iframeLoading">
-        <iframe v-if="iframeUrl" :src="iframeUrl" class="console-frame" allow="clipboard-write"></iframe>
-      </div>
-      <p class="tip" v-if="iframeTip">{{ iframeTip }}</p>
     </div>
 
     <el-dialog v-model="addShow" title="接入 cloud-mail 站点" width="480">
@@ -64,10 +52,6 @@ import axios from 'axios'
 const sites = ref([])
 const addShow = ref(false)
 const saving = ref(false)
-const consoleSite = ref(null)
-const iframeUrl = ref('')
-const iframeLoading = ref(false)
-const iframeTip = ref('')
 const me = JSON.parse(localStorage.getItem('panel_user') || '{}')
 const isAdmin = computed(() => me.role === 'admin')
 
@@ -107,33 +91,41 @@ async function checkAll() {
   ElMessage.success('体检完成')
 }
 
+// Open the site console in a NEW browser tab. Embedding the site in an iframe
+// does not work: cloud-mail keeps its token in the site origin's localStorage,
+// which a panel-origin page cannot write, and cross-origin iframes are blocked
+// by browser storage partitioning (blank page). A direct tab works fine —
+// the first login persists in the site origin.
 async function openConsole(row) {
-  consoleSite.value = row
-  iframeLoading.value = true
-  iframeTip.value = ''
-  iframeUrl.value = ''
+  window.open(row.base_url + '/login', '_blank')
+  ElMessage.info(`已在新标签页打开 ${row.name} 控制台；首次登录后本浏览器会记住会话`)
+}
+
+// copy the stored admin password so the user can paste it once on the site login page
+async function copyCred(row) {
   try {
-    await axios.post(`/site/console/${row.site_id}/token`)
-    // auto-login via localStorage injection page, then embed the site
-    iframeUrl.value = `${location.origin}/api/site/console/${row.site_id}/console.html`
+    const { data } = await axios.get(`/site/password/${row.site_id}`)
+    await navigator.clipboard.writeText(data.data.password)
+    ElMessage.success(`已复制 ${data.data.email} 的密码，粘贴到站点登录页即可`)
   } catch (e) {
-    iframeTip.value = '获取站点会话失败：' + (e.response?.data?.message || e.message)
-  } finally { iframeLoading.value = false }
+    // clipboard API can fail on plain http — fall back to a visible prompt
+    try {
+      const { data } = await axios.get(`/site/password/${row.site_id}`)
+      await ElMessageBox.alert(
+        `<p>管理员邮箱：<b>${data.data.email}</b></p><p>密码：<b>${data.data.password}</b></p>`,
+        `${row.name} 登录信息`, { dangerouslyUseHTMLString: true })
+    } catch (e2) {
+      ElMessage.error(e2.response?.data?.message || '获取密码失败')
+    }
+  }
 }
 
 async function del(row) {
   await ElMessageBox.confirm(`确定移除站点「${row.name}」？`, '提示', { type: 'warning' })
   await axios.delete('/site/delete', { params: { siteId: row.site_id } })
   ElMessage.success('已移除')
-  if (consoleSite.value?.site_id === row.site_id) consoleSite.value = null
   load()
 }
 
 onMounted(load)
 </script>
-
-<style scoped>
-.iframe-wrap { height: 720px; border-radius: 8px; overflow: hidden; border: 1px solid var(--panel-border); }
-.console-frame { width: 100%; height: 100%; border: 0; background: #fff; }
-.tip { color: #f87171; font-size: 13px; }
-</style>
