@@ -1,5 +1,6 @@
-import db from '../db/index.js';
-import { deployCloudMail } from '../services/deploy-service.js';
+import db, { encrypt } from '../db/index.js';
+import crypto from 'node:crypto';
+import { deployCloudMail, initDeployedSite } from '../services/deploy-service.js';
 
 export default async function (app) {
   // start a batch deployment
@@ -38,27 +39,44 @@ export default async function (app) {
         const id = db.prepare('INSERT INTO deploy_record (domain, cred_id, status, steps) VALUES (?,?,?,?)')
           .run(d.domain, item.credId, 'running', '[]').lastInsertRowid;
         records.push(id);
-        jobs.push({ headers, accountId, domain: d.domain, adminEmail: d.adminEmail, recordId: id });
+        jobs.push({ headers, accountId, domain: d.domain, adminEmail: d.adminEmail, credId: item.credId, recordId: id });
       }
     }
 
-    // run async, log steps
+    // run async, log steps; on success auto-register admin + add to site manager
     jobs.forEach(j => {
       const steps = [];
-      deployCloudMail(j.headers, j.accountId, j.domain, j.adminEmail, msg => steps.push({ t: Date.now(), msg }))
-        .then(() => {
-          db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
-            .run('success', JSON.stringify(steps), j.recordId);
-        })
-        .catch(e => {
-          steps.push({ t: Date.now(), msg: '失败: ' + e.message });
-          db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
-            .run('failed', JSON.stringify(steps), j.recordId);
-        });
+      const step = (msg) => steps.push({ t: Date.now(), msg });
+      (async () => {
+        step('开始部署 ' + j.domain);
+        const r = await deployCloudMail(j.headers, j.accountId, j.domain, j.adminEmail, step);
+        if (r.siteUrl) {
+          // initial admin password for the new site
+          const adminPassword = crypto.randomBytes(9).toString('base64url');
+          try {
+            await initDeployedSite(r.siteUrl, j.adminEmail, adminPassword, r.jwtSecret, step);
+            step(`站点已自动接入站点管理；管理员 ${j.adminEmail} 初始密码: ${adminPassword}（请尽快登录修改）`);
+            db.prepare(`INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache)
+              VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)`)
+              .run(j.domain, r.siteUrl, j.adminEmail, encrypt(adminPassword), item_credId(j), j.domain, r.workerName, 'online', r.token || null);
+          } catch (e) {
+            step('自动注册/接入失败（站点本身已部署成功）: ' + e.message);
+          }
+        }
+        db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
+          .run('success', JSON.stringify(steps), j.recordId);
+      })().catch(e => {
+        step('失败: ' + e.message);
+        db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
+          .run('failed', JSON.stringify(steps), j.recordId);
+      });
     });
 
     return { code: 200, data: { deployIds: records, count: jobs.length }, message: `已启动 ${jobs.length} 个部署任务` };
   });
+
+  // helper: jobs carry credId directly
+  function item_credId(j) { return j.credId; }
 
   app.get('/records', { preHandler: [app.auth] }, async () => {
     const list = db.prepare('SELECT * FROM deploy_record ORDER BY deploy_id DESC LIMIT 100').all()

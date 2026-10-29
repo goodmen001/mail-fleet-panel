@@ -130,10 +130,17 @@ const groups = ref([])
 function newGroup() {
   return { credId: null, zones: [], rows: [{ domain: '', adminEmail: '' }], loadingZones: false, zoneError: '' }
 }
+// prefill rows: one per zone; admin email defaults to admin@first-domain for the first row, admin@<own domain> for the rest
+function prefillRows(g) {
+  g.rows = g.zones.map((z, i) => ({ domain: z.name, adminEmail: i === 0 ? 'admin@' + z.name : 'admin@' + z.name }))
+}
 function addGroup() { groups.value.push(newGroup()) }
 function removeGroup(i) { groups.value.splice(i, 1) }
 
-function defaultEmail(g) { return '' }
+function defaultEmail(g) {
+  const first = g.zones[0]?.name
+  return first ? 'admin@' + first : ''
+}
 
 const totalJobs = computed(() => groups.value.reduce((n, g) => n + g.rows.filter(r => r.domain && r.adminEmail).length, 0))
 
@@ -144,8 +151,7 @@ async function onCredChange(g) {
   try {
     const { data } = await axios.get('/credential/zones', { params: { credId: g.credId } })
     g.zones = data.data || []
-    // prefill rows: one per zone, default admin email prefix 'admin@域名'
-    g.rows = g.zones.map(z => ({ domain: z.name, adminEmail: 'admin@' + z.name }))
+    prefillRows(g)
   } catch (e) {
     g.zoneError = e.response?.data?.message || '拉取域名失败'
   } finally { g.loadingZones = false }
