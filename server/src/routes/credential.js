@@ -4,6 +4,20 @@ function mask(row) {
   return { ...row, token: '••••••' + decrypt(row.token_enc).slice(-4), token_enc: undefined };
 }
 
+// shared credential helpers — exported so any route module can use them
+// (fastify plugin encapsulation makes app-decorated props invisible to
+// sibling plugins, which broke deploy's getCredentialHeaders)
+export function credentialHeaders(credId) {
+  const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0);
+  if (!row) return null;
+  const token = decrypt(row.token_enc).trim();
+  return row.kind === 'global_key'
+    ? { 'X-Auth-Email': (row.auth_email || '').trim(), 'X-Auth-Key': token }
+    : { Authorization: `Bearer ${token}` };
+}
+export const accountIdOf = (credId) =>
+  db.prepare('SELECT account_id FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0)?.account_id;
+
 export default async function (app) {
   app.get('/list', { preHandler: [app.auth] }, async () => {
     const list = db.prepare('SELECT cred_id AS credId, name, kind, account_id AS accountId, create_time FROM cf_credential ORDER BY cred_id DESC').all();
@@ -50,9 +64,9 @@ export default async function (app) {
   app.get('/zones', { preHandler: [app.auth] }, async (req, reply) => {
     const credId = Number(req.query.credId);
     if (!credId) return reply.code(400).send({ code: 400, message: 'credId 必填' });
-    const headers = app.getCredentialHeaders(credId);
+    const headers = credentialHeaders(credId);
     if (!headers) return reply.code(404).send({ code: 404, message: '凭证不存在' });
-    const accountId = app.getAccountId(credId);
+    const accountId = accountIdOf(credId);
     try {
       let url = 'https://api.cloudflare.com/client/v4/zones?per_page=50';
       if (accountId) url += `&account.id=${accountId}`;
@@ -64,15 +78,4 @@ export default async function (app) {
       return reply.code(502).send({ code: 502, message: '无法连接 Cloudflare: ' + e.message });
     }
   });
-
-  // internal helper for other modules
-  app.getCredentialHeaders = (credId) => {
-    const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0);
-    if (!row) return null;
-    const token = decrypt(row.token_enc).trim();
-    return row.kind === 'global_key'
-      ? { 'X-Auth-Email': (row.auth_email || '').trim(), 'X-Auth-Key': token }
-      : { Authorization: `Bearer ${token}` };
-  };
-  app.getAccountId = (credId) => db.prepare('SELECT account_id FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0)?.account_id;
 }

@@ -8,8 +8,6 @@ fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'panel.db'));
 db.exec('PRAGMA journal_mode = WAL');
-// migration: auth email for Global API Key credentials
-try { db.exec('ALTER TABLE cf_credential ADD COLUMN auth_email TEXT'); } catch { /* exists */ }
 
 // ---- crypto for Cloudflare credentials ----
 const SECRET = process.env.PANEL_SECRET || 'change-me-in-production';
@@ -90,6 +88,9 @@ CREATE TABLE IF NOT EXISTS version_state (
   last_check DATETIME
 );
 `);
+
+// migration: auth email for Global API Key credentials (must run AFTER table creation)
+try { db.exec('ALTER TABLE cf_credential ADD COLUMN auth_email TEXT'); } catch { /* exists */ }
 
 // seed version state
 db.prepare(`INSERT OR IGNORE INTO version_state (id) VALUES (1)`).run();

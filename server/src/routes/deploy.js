@@ -1,6 +1,7 @@
 import db, { encrypt } from '../db/index.js';
 import crypto from 'node:crypto';
 import { deployCloudMail, initDeployedSite } from '../services/deploy-service.js';
+import { credentialHeaders, accountIdOf } from './credential.js';
 
 export default async function (app) {
   // start a batch deployment
@@ -18,7 +19,6 @@ export default async function (app) {
       return reply.code(400).send({ code: 400, message: 'credId + domains[] 必填（或使用 items 多账号模式）' });
     }
 
-    const { getCredentialHeaders, getAccountId } = app;
     const records = [];
     const jobs = [];
 
@@ -28,8 +28,8 @@ export default async function (app) {
       }
       const credRow = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(item.credId);
       if (!credRow) return reply.code(404).send({ code: 404, message: `凭证 ${item.credId} 不存在` });
-      const headers = getCredentialHeaders(item.credId);
-      const accountId = item.accountId || getAccountId(item.credId);
+      const headers = credentialHeaders(item.credId);
+      const accountId = item.accountId || accountIdOf(item.credId);
       if (!accountId) return reply.code(400).send({ code: 400, message: `凭证「${credRow.name}」缺少 Account ID` });
 
       for (const d of item.domains) {
