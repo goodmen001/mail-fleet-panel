@@ -110,9 +110,12 @@ try{
 
 // the site's axios is built with a relative baseURL "/api" — inside the embed
 // that must hit our proxy (…/console/:siteId/api) instead of the panel origin
+// vue-router's history base is compiled in as createWebHistory("/") — an
+// explicit arg means the injected <base href> is IGNORED, so the router would
+// see "/api/site/console/1/…" and 404; rewrite the compiled base to our prefix
 const JS_REWRITES = [
-  [/baseURL:"\/api"/g, (prefix) => `baseURL:"${prefix}/api"`],
-  [/baseURL:"\/api\/"/g, (prefix) => `baseURL:"${prefix}/api/"`]
+  [/baseURL:"\/api"/g, (prefix) => () => `baseURL:"${prefix}/api"`],
+  [/history:([A-Za-z_$][\w$]*)\("\/"\)/g, (prefix) => (m, fn) => `history:${fn}("${prefix}/")`]
 ];
 function rewriteJs(code, prefix) {
   let out = code;
