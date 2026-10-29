@@ -6,7 +6,7 @@ function mask(row) {
 
 export default async function (app) {
   app.get('/list', { preHandler: [app.auth] }, async () => {
-    const list = db.prepare('SELECT cred_id, name, kind, account_id, create_time FROM cf_credential ORDER BY cred_id DESC').all();
+    const list = db.prepare('SELECT cred_id AS credId, name, kind, account_id AS accountId, create_time FROM cf_credential ORDER BY cred_id DESC').all();
     return { code: 200, data: list };
   });
 
@@ -39,14 +39,17 @@ export default async function (app) {
     return { code: 200, data: { credId: r.lastInsertRowid }, message: '凭证已保存' };
   });
 
-  app.delete('/delete', { preHandler: [app.auth, app.requireAdmin] }, async (req) => {
-    db.prepare('DELETE FROM cf_credential WHERE cred_id = ?').run(req.query.credId);
+  app.delete('/delete', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const credId = Number(req.query.credId);
+    if (!credId) return reply.code(400).send({ code: 400, message: 'credId 必填' });
+    db.prepare('DELETE FROM cf_credential WHERE cred_id = ?').run(credId);
     return { code: 200, message: '已删除' };
   });
 
   // auto-fetch domains (zones) under a credential, to feed the deploy center
   app.get('/zones', { preHandler: [app.auth] }, async (req, reply) => {
-    const credId = req.query.credId;
+    const credId = Number(req.query.credId);
+    if (!credId) return reply.code(400).send({ code: 400, message: 'credId 必填' });
     const headers = app.getCredentialHeaders(credId);
     if (!headers) return reply.code(404).send({ code: 404, message: '凭证不存在' });
     const accountId = app.getAccountId(credId);
@@ -64,12 +67,12 @@ export default async function (app) {
 
   // internal helper for other modules
   app.getCredentialHeaders = (credId) => {
-    const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(credId);
+    const row = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0);
     if (!row) return null;
     const token = decrypt(row.token_enc);
     return row.kind === 'global_key'
       ? { 'X-Auth-Email': row.auth_email || '', 'X-Auth-Key': token }
       : { Authorization: `Bearer ${token}` };
   };
-  app.getAccountId = (credId) => db.prepare('SELECT account_id FROM cf_credential WHERE cred_id = ?').get(credId)?.account_id;
+  app.getAccountId = (credId) => db.prepare('SELECT account_id FROM cf_credential WHERE cred_id = ?').get(Number(credId) || 0)?.account_id;
 }
