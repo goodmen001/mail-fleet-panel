@@ -115,7 +115,21 @@ try{
 // see "/api/site/console/1/…" and 404; rewrite the compiled base to our prefix
 const JS_REWRITES = [
   [/baseURL:"\/api"/g, (prefix) => () => `baseURL:"${prefix}/api"`],
-  [/history:([A-Za-z_$][\w$]*)\("\/"\)/g, (prefix) => (m, fn) => `history:${fn}("${prefix}/")`]
+  [/history:([A-Za-z_$][\w$]*)\("\/"\)/g, (prefix) => (m, fn) => `history:${fn}("${prefix}/")`],
+  // runtime-composed ABSOLUTE refs inside the app bundle: tiny-editor injects
+  // <script src="/tinymce/tinymce.min.js"> at runtime (tiny-editor/index.vue)
+  // and the logo/icon paths come from compiled BASE_URL="/" — without this
+  // they hit the PANEL origin and get the panel's own index.html back
+  // (SyntaxError: Unexpected token '<' → app crashes on the loading screen).
+  // Rewrite the quoted/plain occurrences of the static roots inside JS too.
+  [/(["'`])\/(tinymce|image|fonts)\//g, (prefix) => (m, q, name) => `${q}${prefix}/${name}/`],
+  [/(["'`])\/(mail\.png|mail-pwa\.png)/g, (prefix) => (m, q, f) => `${q}${prefix}/${f}`],
+  // vite compiles BASE_URL="/" into the preload helper: Wg=function(e){return"/"+e}
+  // — every lazy chunk/preload URL gets an absolute "/assets/…" that lands on
+  // the PANEL origin (returns the panel's own index.html → MIME module error).
+  // Rewrite the compiled base function to our embed prefix.
+  [/function\(([a-zA-Z_$][\w$]*)\)\{return"\/"\+([a-zA-Z_$][\w$]*)\}/g,
+    (prefix) => (m, arg, v) => `function(${arg}){return"${prefix}/"+${v}}`]
 ];
 function rewriteJs(code, prefix) {
   let out = code;

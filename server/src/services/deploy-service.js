@@ -70,6 +70,12 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   const rnd = () => Math.random().toString(36).slice(2, 10);
   const jwtSecret = crypto.randomBytes(16).toString('hex');
   const workerName = `cloud-mail-${rnd()}`;
+  // The site URL must NEVER be the account's own domain: deploy the website
+  // under "mail." + domain instead. Emails stay @<domain> — the `domain`
+  // binding below keeps the ORIGINAL domain (registration / send/receive
+  // validate against it) and the Email Routing catch-all on the zone still
+  // routes @<domain> mail to this worker regardless of its hostname.
+  const siteDomain = `mail.${domain}`;
 
   // 1. D1
   step('创建 D1 数据库');
@@ -146,15 +152,15 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
   form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
   await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
 
-  // 6. custom domain + email routing
+  // 6. custom domain + email routing — the WEBSITE lives on mail.<domain>;
+  //    the apex/zone is only used for Email Routing (@<domain> addresses)
   let siteUrl = null;
   const zone = await cf(headers, 'GET', `/zones?name=${domain}`);
   if (zone.length) {
-    siteUrl = `https://${domain}`;
-    step('绑定自定义域名');
-    // override a domain left over from an earlier deploy of the same hostname
+    siteUrl = `https://${siteDomain}`;
+    step(`绑定网站域名 ${siteDomain}`);
     await cf(headers, 'PUT', `/accounts/${accountId}/workers/domains`,
-      { zone_id: zone[0].id, hostname: domain, service: workerName, environment: 'production', override_existing_origin: true }).catch(e => step(`域名绑定提示: ${e.message}`));
+      { zone_id: zone[0].id, hostname: siteDomain, service: workerName, environment: 'production', override_existing_origin: true }).catch(e => step(`域名绑定提示: ${e.message}`));
     step('配置 Email Routing catch-all');
     // NOTE: the catch-all rule lives under /rules/ — without it CF answers 404
     await cf(headers, 'PUT', `/zones/${zone[0].id}/email/routing/rules/catch_all`, {
