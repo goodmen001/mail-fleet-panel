@@ -41,6 +41,39 @@ export default async function (app) {
     return { code: 200, message: '站点已接入' };
   });
 
+  // edit: rename / change base url / change admin email, optionally reset the
+  // admin password. Re-verifies the site login whenever any credential-affecting
+  // field changes; clears the cached jwt so the next proxy call re-logins.
+  app.put('/edit', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const siteId = Number(req.body?.siteId);
+    const { name, baseUrl, adminEmail, adminPassword } = req.body || {};
+    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
+    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    if (!name || !baseUrl || !adminEmail) {
+      return reply.code(400).send({ code: 400, message: '名称、站点地址、管理员邮箱必填' });
+    }
+    const url = baseUrl.replace(/\/+$/, '');
+    const password = adminPassword ? String(adminPassword) : null;
+    const changed = url !== site.base_url || adminEmail !== site.admin_email || password;
+    if (changed) {
+      // probe + login with the (possibly new) credentials before saving
+      try {
+        const token = await siteLogin({
+          base_url: url,
+          admin_email: adminEmail,
+          admin_password_enc: password ? encrypt(password) : site.admin_password_enc
+        });
+        db.prepare("UPDATE site SET name=?, base_url=?, admin_email=?, admin_password_enc=COALESCE(?, admin_password_enc), jwt_cache=?, status='online', last_check=datetime('now') WHERE site_id=?")
+          .run(name, url, adminEmail, password ? encrypt(password) : null, token, siteId);
+      } catch (e) {
+        return reply.code(400).send({ code: 400, message: '站点连接/登录失败: ' + e.message });
+      }
+    } else {
+      db.prepare('UPDATE site SET name=?, base_url=?, admin_email=? WHERE site_id=?').run(name, url, adminEmail, siteId);
+    }
+    return { code: 200, message: '站点已更新' };
+  });
+
   app.delete('/delete', { preHandler: [app.auth, app.requireAdmin] }, async (req) => {
     db.prepare('DELETE FROM site WHERE site_id = ?').run(req.query.siteId);
     return { code: 200, message: '已删除' };

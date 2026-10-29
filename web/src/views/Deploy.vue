@@ -9,7 +9,10 @@
           <template #default="{row}">{{ row.kind === 'token' ? 'API Token' : 'Global Key' }}</template>
         </el-table-column>
         <el-table-column prop="accountId" label="Account ID" min-width="200">
-          <template #default="{row}">{{ row.accountId || '—' }}</template>
+          <template #default="{row}">
+            <span class="secret" v-if="!reveal">{{ maskId(row.accountId) }}</span>
+            <span v-else>{{ row.accountId || '—' }}</span>
+          </template>
         </el-table-column>
         <el-table-column label="操作" width="120">
           <template #default="{row}">
@@ -21,7 +24,12 @@
     </div>
 
     <div class="tech-card" style="margin-top:20px">
-      <div class="tech-title"><Icon icon="mdi:rocket-launch-outline"/>批量部署 cloud-mail</div>
+      <div class="tech-title">
+        <Icon icon="mdi:rocket-launch-outline"/>批量部署 cloud-mail
+        <el-button size="small" :type="reveal ? 'warning' : 'default'" style="margin-left:auto" @click="reveal = !reveal">
+          <Icon :icon="reveal ? 'mdi:eye-off' : 'mdi:eye'"/>{{ reveal ? '隐藏账号' : '显示账号' }}
+        </el-button>
+      </div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:16px"
         title="部署内容：D1 数据库 + KV + Worker + 自定义域名 + Email Routing，全自动一条龙。选择凭证后自动带出该账号下的域名；每个域名可单独指定管理员邮箱，不同 Cloudflare 账号可分开配置。"/>
 
@@ -72,7 +80,12 @@
     <div class="tech-card" style="margin-top:20px">
       <div class="tech-title"><Icon icon="mdi:history"/>部署记录</div>
       <el-table :data="records" size="small">
-        <el-table-column prop="domain" label="域名" min-width="180"/>
+        <el-table-column label="域名" min-width="180">
+          <template #default="{row}">
+            <span class="secret" v-if="!reveal">{{ maskDomain(row.domain) }}</span>
+            <span v-else>{{ row.domain }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="90">
           <template #default="{row}">
             <el-tag size="small" effect="dark" :type="row.status === 'success' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'">
@@ -134,6 +147,15 @@ const deploying = ref(false)
 const credForm = ref({ name: '', kind: 'token', token: '', accountId: '', authEmail: '' })
 const me = JSON.parse(localStorage.getItem('panel_user') || '{}')
 const isAdmin = me.role === 'admin'
+
+// privacy toggle (default hidden) + masking helpers
+const reveal = ref(false)
+const maskId = (id) => id ? id.slice(0, 4) + '••••' + id.slice(-4) : '—'
+const maskDomain = (d) => {
+  if (!d) return ''
+  const parts = d.split('.')
+  return parts.length > 1 ? parts[0].slice(0, 1) + '•••.' + parts.slice(1).join('.') : d
+}
 
 // per-account deployment groups
 const groups = ref([])
@@ -244,4 +266,5 @@ onMounted(() => { load(); addGroup() })
 .tip-ok { color: #34d399; font-size: 12px; }
 .tip-err { color: #f87171; font-size: 12px; }
 .step-log { max-height: 300px; overflow: auto; font-size: 12px; font-family: monospace; }
+.secret { letter-spacing: 1px; color: #9aa4b2; user-select: none; }
 </style>

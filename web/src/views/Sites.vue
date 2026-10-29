@@ -5,11 +5,20 @@
       <div style="margin-bottom:14px">
         <el-button type="primary" @click="addShow = true" v-if="isAdmin">接入站点</el-button>
         <el-button @click="checkAll">全部体检</el-button>
+        <!-- privacy toggle: hide/show every account email on this page -->
+        <el-button :type="reveal ? 'warning' : 'default'" @click="reveal = !reveal" style="float:right">
+          <Icon :icon="reveal ? 'mdi:eye-off' : 'mdi:eye'"/>{{ reveal ? '隐藏账号' : '显示账号' }}
+        </el-button>
       </div>
       <el-table :data="sites" style="width:100%">
         <el-table-column prop="name" label="名称" width="160"/>
         <el-table-column prop="base_url" label="地址" min-width="220"/>
-        <el-table-column prop="admin_email" label="管理员" width="200"/>
+        <el-table-column label="管理员" width="220">
+          <template #default="{row}">
+            <span class="secret" v-if="!reveal">{{ maskEmail(row.admin_email) }}</span>
+            <span v-else>{{ row.admin_email }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="状态" width="100">
           <template #default="{row}">
             <el-tag :type="row.status === 'online' ? 'success' : row.status === 'offline' ? 'danger' : 'info'" effect="dark" size="small">
@@ -17,13 +26,14 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="300">
+        <el-table-column label="操作" width="360">
           <template #default="{row}">
             <el-badge :value="unread[row.site_id]" :max="99" :hidden="!unread[row.site_id]" class="unread-badge">
               <el-button size="small" type="primary" @click="openConsole(row)">控制台</el-button>
             </el-badge>
             <el-button size="small" @click="copyCred(row)" v-if="isAdmin">复制密码</el-button>
             <el-button size="small" @click="check(row)">体检</el-button>
+            <el-button size="small" type="primary" plain @click="editSite(row)" v-if="isAdmin">修改</el-button>
             <el-button size="small" type="danger" @click="del(row)" v-if="isAdmin">移除</el-button>
           </template>
         </el-table-column>
@@ -67,6 +77,21 @@
         <el-button type="primary" :loading="saving" @click="add">接入</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="editShow" title="修改站点信息" width="480">
+      <el-form label-width="100px">
+        <el-form-item label="名称"><el-input v-model="editForm.name"/></el-form-item>
+        <el-form-item label="站点地址"><el-input v-model="editForm.baseUrl" placeholder="https://mail.example.com"/></el-form-item>
+        <el-form-item label="管理员邮箱"><el-input v-model="editForm.adminEmail"/></el-form-item>
+        <el-form-item label="新密码">
+          <el-input v-model="editForm.adminPassword" type="password" show-password placeholder="留空表示不修改密码"/>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editShow = false">取消</el-button>
+        <el-button type="primary" :loading="saving" @click="saveEdit">保存修改</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -83,6 +108,35 @@ const me = JSON.parse(localStorage.getItem('panel_user') || '{}')
 const isAdmin = computed(() => me.role === 'admin')
 
 const form = ref({ name: '', baseUrl: '', adminEmail: '', adminPassword: '' })
+
+// privacy toggle + email masking (default hidden: 隐私保护)
+const reveal = ref(false)
+const maskEmail = (e) => {
+  if (!e) return ''
+  const [local, domain] = e.split('@')
+  if (!domain) return '••••'
+  const head = local.slice(0, 2)
+  return `${head}${'•'.repeat(Math.max(3, local.length - 2))}@${domain}`
+}
+
+// ---- edit site ----
+const editShow = ref(false)
+const editForm = ref({ siteId: 0, name: '', baseUrl: '', adminEmail: '', adminPassword: '' })
+function editSite(row) {
+  editForm.value = { siteId: row.site_id, name: row.name, baseUrl: row.base_url, adminEmail: row.admin_email, adminPassword: '' }
+  editShow.value = true
+}
+async function saveEdit() {
+  saving.value = true
+  try {
+    await axios.put('/site/edit', editForm.value)
+    ElMessage.success('站点已更新')
+    editShow.value = false
+    load()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '更新失败')
+  } finally { saving.value = false }
+}
 
 async function load() {
   const { data } = await axios.get('/site/list')
@@ -223,6 +277,7 @@ onUnmounted(() => clearInterval(unreadTimer))
 
 <style scoped>
 .unread-badge :deep(.el-badge__content) { pointer-events: none; }
+.secret { letter-spacing: 1px; color: #9aa4b2; user-select: none; }
 .console-tabs {
   display: flex;
   align-items: center;
