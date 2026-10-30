@@ -1,21 +1,21 @@
 Mail Fleet Panel — Windows 版使用说明
 =====================================
 
-【启动】双击「启动面板.vbs」
-  不会出现任何黑色命令行窗口，3 秒后浏览器自动打开 http://127.0.0.1:3300
-  停止：双击「停止面板.vbs」
+【启动】双击 mail-fleet-panel.exe 即可（免 vbs，无控制台窗口）
+  启动后浏览器会自动打开 http://127.0.0.1:3300
+  任务栏右下角托盘会出现蓝色邮件图标：
+    · 打开面板 —— 随时在浏览器中打开管理界面
+    · 退出     —— 停止面板服务（数据不受影响）
 
-【注意】请勿直接双击 mail-fleet-panel.exe —— 它是 Node 运行时，直接双击
-  会弹出一个黑色控制台窗口且不会加载面板。请始终通过 vbs 启动。
-
-默认账号 admin / admin123 （登录后请立即在「用户管理」修改密码）
+【默认账号】admin / admin123 （登录后请立即在「用户管理」修改密码）
 
 【目录】
-  mail-fleet-panel.exe   Node.js 运行时（官方版改名）
-  panel.cjs              面板程序（必须保留）
+  mail-fleet-panel.exe   面板主程序（双击运行）
+  traybin\               托盘图标辅助程序（必须保留）
   web\dist\              前端页面（必须保留）
   data\                  数据库与数据（自动生成；备份此目录 = 备份一切）
-  data\bundles\worker.zip  批量部署用的 worker 包（放入后部署中心可用）
+  data\worker-dist\      批量部署用的定制 worker 包
+  data\official-dist\    批量部署用的官方 worker 包
 
 【可选环境变量】（可设为系统环境变量）
   PORT=3300           监听端口

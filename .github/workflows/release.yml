@@ -128,6 +128,13 @@ jobs:
           fi
           # web dist + README (sea-entry.cjs is an intermediate — blob embeds it)
           rm -f pkg/sea-entry.cjs sea-prep.blob
+          # tray icon binary (prebuilt Go exe from the systray2 npm package,
+          # driven by server/src/services/tray-service.js over stdin/stdout JSON)
+          mkdir -p pkg/traybin /tmp/traypkg
+          curl -sSLo /tmp/traypkg/systray2.tgz https://registry.npmjs.org/systray2/-/systray2-2.1.4.tgz
+          tar -xzf /tmp/traypkg/systray2.tgz -C /tmp/traypkg package/traybin/tray_windows_release.exe
+          cp /tmp/traypkg/package/traybin/tray_windows_release.exe pkg/traybin/
+          test -f pkg/traybin/tray_windows_release.exe
           mkdir -p pkg/web
           cp -r web/dist pkg/web/dist
           cp tools/win-README.txt pkg/README.txt

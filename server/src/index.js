@@ -6,6 +6,7 @@ import staticFiles from '@fastify/static';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import db, { hashPassword } from './db/index.js';
+import { startTray, stopTray, openBrowser } from './services/tray-service.js';
 
 import authRoutes from './routes/auth.js';
 import credRoutes from './routes/credential.js';
@@ -68,6 +69,23 @@ if (userCount === 0) {
 }
 
 const port = Number(process.env.PORT || 3300);
-app.listen({ port, host: '0.0.0.0' }).then(() => app.log.info(`panel listening on ${port}`));
+const url = `http://127.0.0.1:${port}`;
+await app.listen({ port, host: '0.0.0.0' });
+app.log.info(`panel listening on ${port}`);
+
+// Windows exe niceties: auto-open the panel + tray icon (打开面板/退出).
+// Tray quit → stop tray, close the server, let running jobs finish via exit.
+const isSealedExe = !!process.env.PANEL_SEA;
+if (isSealedExe) openBrowser(url);
+startTray({
+  url,
+  tooltip: `Mail Fleet Panel (${url})`,
+  onOpen: () => openBrowser(url),
+  onQuit: async () => {
+    stopTray();
+    try { await app.close(); } catch { /* force below regardless */ }
+    process.exit(0);
+  }
+});
 }
 main();
