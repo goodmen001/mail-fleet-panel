@@ -106,8 +106,11 @@
                   <td>站点地址</td>
                   <td>
                     <span class="secret" v-if="!reveal">{{ maskDomain(r.siteDomain || ('mail.' + r.domain)) }}</span><span v-else>https://{{ r.siteDomain || ('mail.' + r.domain) }}</span>
-                    <el-tag v-if="r.siteUrlFixed" size="small" type="warning" effect="plain" style="margin-left:8px">
-                      站点网址已核对修正（仅改网址，数据未动）
+                    <el-tag v-if="r.onMailDomain === false" size="small" type="warning" effect="plain" style="margin-left:8px">
+                      当前访问地址不是 mail.{{ r.domain }}，重新部署时将自动绑定 mail.{{ r.domain }}（数据不动）
+                    </el-tag>
+                    <el-tag v-else-if="r.onMailDomain" size="small" type="success" effect="plain" style="margin-left:8px">
+                      mail.{{ r.domain }} 访问有效
                     </el-tag>
                   </td>
                 </tr>
@@ -285,7 +288,7 @@ async function onCredChange(g) {
         row.hasAi = !!info?.hasAi
         row.compatDate = info?.compatDate || ''
         row.siteDomain = info?.siteDomain || ''
-        row.siteUrlFixed = info?.siteUrlFixed || null
+        row.onMailDomain = info?.onMailDomain
         row.observability = !!info?.observability
         row.workerDomains = info?.workerDomains || []
         if (info?.deployed) g.showDetail = true

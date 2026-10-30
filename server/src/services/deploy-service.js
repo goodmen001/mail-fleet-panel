@@ -289,6 +289,43 @@ export async function upgradeDeployedMail(headers, accountId, workerName, worker
   return { success: true, workerName };
 }
 
+// ensure the site is reachable at mail.<domain>: attach the custom domain to
+// the worker (Cloudflare auto-creates the DNS record + cert) and (re)point the
+// Email Routing catch-all. Used by the upgrade path when an older deployment
+// lives on a different hostname — the site MOVES to mail.<domain>, the D1/KV
+// data is untouched. Returns mail.<domain> on success, null when the zone is
+// missing or the bind failed (caller then keeps the old URL).
+export async function ensureMailDomain(headers, accountId, domain, workerName, onStep) {
+  const step = (msg) => onStep?.(msg);
+  const siteDomain = `mail.${domain}`;
+  const zone = await cf(headers, 'GET', `/zones?name=${domain}`);
+  if (!zone.length) {
+    step(`未找到 zone ${domain}，无法绑定 ${siteDomain}`);
+    return null;
+  }
+  let bound = false;
+  try {
+    step(`绑定网站域名 ${siteDomain}`);
+    await cf(headers, 'PUT', `/accounts/${accountId}/workers/domains`,
+      { zone_id: zone[0].id, hostname: siteDomain, service: workerName, environment: 'production', override_existing_origin: true });
+    bound = true;
+    step(`${siteDomain} 已绑定（DNS 记录由 Cloudflare 自动创建，TLS 证书签发需要几分钟）`);
+  } catch (e) {
+    step(`绑定 ${siteDomain} 失败: ${e.message}`);
+  }
+  try {
+    await cf(headers, 'PUT', `/zones/${zone[0].id}/email/routing/rules/catch_all`, {
+      matcher: { type: 'all' },
+      actions: [{ type: 'worker', value: [workerName] }],
+      enabled: true
+    });
+    step('Email Routing catch-all 已配置');
+  } catch (e) {
+    step(`Email Routing 提示: ${e.message}`);
+  }
+  return bound ? siteDomain : null;
+}
+
 // a Worker counts as a cloud-mail instance when it has both a D1 and a KV
 // binding (only cloud-mail sets up that pair); reading settings also gives us
 // jwt_secret etc. for the upgrade
@@ -430,5 +467,10 @@ export async function findDeployedWorker(headers, accountId, domain) {
       (a.hostname === `mail.${domain}` ? 0 : a.hostname === domain ? 1 : 2) -
       (b.hostname === `mail.${domain}` ? 0 : b.hostname === domain ? 1 : 2));
   const siteDomain = candidates[0]?.hostname || `mail.${domain}`;
-  return { workerName: m.workerName, siteDomain, siteUrl: `https://${siteDomain}`, settings: m.settings };
+  return {
+    workerName: m.workerName, siteDomain, siteUrl: `https://${siteDomain}`, settings: m.settings,
+    // is the site actually reachable at mail.<domain>? false → older deployment
+    // on another hostname; the upgrade path then re-binds mail.<domain> to it
+    onMailDomain: candidates.some(c => c.hostname === `mail.${domain}`)
+  };
 }

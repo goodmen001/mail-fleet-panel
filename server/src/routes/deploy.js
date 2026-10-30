@@ -2,7 +2,7 @@ import db, { encrypt, dataDir } from '../db/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerDeep } from '../services/deploy-service.js';
+import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerDeep, ensureMailDomain } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
 // the built-in packages ship with the installation. They must NOT live under
@@ -120,21 +120,12 @@ export default async function (app) {
         // custom domains attached to THIS worker
         workerDomains: customDomains.filter(x => x.service === m.workerName).map(x => x.hostname)
       };
-      // 拉取信息阶段即核对站点管理里的网址：旧部署可能不是 mail.<域名>（用错根
-      // 账号域名等），发现不一致就只修正 site.base_url 这一个字段——邮件/用户/
-      // 凭证/版本号等其它数据一律不动。无记录则跳过（升级部署后会再核对一次）。
-      const actualUrl = `https://${siteDomain}`;
-      const siteRows = db.prepare('SELECT site_id, base_url FROM site WHERE worker_name = ? OR domain = ?')
-        .all(m.workerName, d);
-      const fixes = [];
-      for (const s of siteRows) {
-        const normalized = (s.base_url || '').replace(/\/+$/, '');
-        if (normalized !== actualUrl) {
-          db.prepare('UPDATE site SET base_url = ? WHERE site_id = ?').run(actualUrl, s.site_id);
-          fixes.push({ from: normalized || '(空)', to: actualUrl });
-        }
-      }
-      if (fixes.length) result[d].siteUrlFixed = fixes;
+      // 站点真实地址核对：要求一律以 mail.<域名> 访问。旧部署若绑在别的
+      // 主机名上，这里只做提示——「部署」时会把 mail.<域名> 真实绑定到该
+      // Worker（DNS 由 CF 自动创建），站点随之迁到 mail.<域名>，数据不动。
+      const onMail = customDomains.some(x => x.service === m.workerName && x.hostname === `mail.${d}`);
+      result[d].onMailDomain = onMail;
+      if (!onMail) result[d].siteUrlNote = `当前访问地址不是 mail.${d}，重新部署时将自动绑定 mail.${d}（数据不动）`;
     }
     return { code: 200, data: result };
   });
@@ -213,10 +204,21 @@ export default async function (app) {
         if (existing) {
           step(`检测到已部署的邮箱服务（Worker: ${existing.workerName}${existing.settings ? '，配置已读出' : ''}），进入升级模式：只更新邮局程序，原邮件/用户/配置数据不动`);
           const ur = await upgradeDeployedMail(j.headers, j.accountId, existing.workerName, j.pkgDir, step, existing.settings);
-          // 升级后核对站点网址：早期可能用错根账号域名部署，站点管理里记录的
-          // base_url 与 Worker 实际绑定的域名不符。只修正 site.base_url 这一个
-          // 字段（按 worker_name 定位），邮件/用户/凭证/版本号等其它数据一律不动。
-          const actualUrl = existing.siteUrl;
+          // 站点访问地址一律要求 mail.<域名> 真实有效：旧部署若绑在别的
+          // 主机名上，这里把 mail.<域名> 真实绑定到该 Worker（自定义域 +
+          // DNS 由 CF 自动创建 + Email Routing），D1/KV 数据不动，随后把
+          // 站点管理 base_url 修正为 mail.<域名>（仅网址，其它数据不动）。
+          let actualUrl = `https://mail.${j.domain}`;
+          if (!existing.onMailDomain) {
+            const bound = await ensureMailDomain(j.headers, j.accountId, j.domain, existing.workerName, step);
+            if (bound) {
+              actualUrl = `https://${bound}`;
+              step(`站点访问地址已迁移为 ${actualUrl}（原地址 ${existing.siteUrl} 不再使用）`);
+            } else {
+              step(`mail.${j.domain} 绑定失败，站点访问地址保持 ${existing.siteUrl}`);
+              actualUrl = existing.siteUrl;
+            }
+          }
           const siteRows = db.prepare('SELECT site_id, base_url FROM site WHERE worker_name = ? OR domain = ?')
             .all(existing.workerName, j.domain);
           for (const s of siteRows) {
