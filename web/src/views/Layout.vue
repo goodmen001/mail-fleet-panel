@@ -91,7 +91,8 @@ function cmpVer(a, b) {
 }
 onMounted(async () => {
   try {
-    const { data } = await axios.get('/api/version/app')
+    // axios baseURL is '/api' — do NOT repeat it here or the request hits /api/api/…
+    const { data } = await axios.get('/version/app')
     appVersion.value = data.data?.version || '?'
   } catch { appVersion.value = '?' }
 })
@@ -99,7 +100,7 @@ onMounted(async () => {
 async function checkUpdate() {
   if (newVersion.value) return
   try {
-    const { data } = await axios.get('/api/version/latest')
+    const { data } = await axios.get('/version/latest')
     const latest = data.data?.tag
     if (latest && appVersion.value !== '?' && cmpVer(appVersion.value, latest) > 0) {
       newVersion.value = latest.replace(/^v/, '')
@@ -158,7 +159,7 @@ nav { flex: 1; margin-top: 12px; display: flex; flex-direction: column; gap: 4px
 }
 .ver-chip:hover { color: var(--panel-accent); border-color: rgba(34,211,238,.35); }
 .new-tag { color: #fbbf24; }
-.main { flex: 1; display: flex; flex-direction: column; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .topbar {
   height: 56px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 24px; border-bottom: 1px solid var(--panel-border);
@@ -166,5 +167,8 @@ nav { flex: 1; margin-top: 12px; display: flex; flex-direction: column; gap: 4px
 }
 .page-title { font-weight: 600; letter-spacing: 1px; }
 .me { color: #9ca3af; font-size: 13px; display: flex; align-items: center; gap: 8px; }
-.content { padding: 24px; flex: 1; }
+/* min-width:0 lets el-table min-widths shrink instead of bursting the flex
+   layout on narrow screens (overflow seen from ~1100px down); tables get
+   their own horizontal scroll */
+.content { padding: 24px; flex: 1; min-width: 0; overflow-x: auto; }
 </style>
