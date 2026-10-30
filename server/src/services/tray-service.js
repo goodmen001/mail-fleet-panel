@@ -10,13 +10,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 16x16 blue mail icon, base64 PNG (generated from a simple envelope glyph)
+// 32x32 blue envelope icon, base64 PNG (rounded blue square + white flap V)
 const ICON_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/2hAAAAu0lEQVR42mNkYPhfz0BEwMjA' +
-  'yMDIwAAiZGRgZGSAcRqA+DDS8T8DA8P/IwPD/yMDw/8jA8P/IwPD4TQAsxkgFhBWAGIBYQIg' +
-  'FhC2AGIBYQdALSAsAKoG0gwQSwGyAVgFiAWELQDFA8IioGoArQDRNCArAMUCogWgWEC0AFQN' +
-  'iJaAagHRAlA1IFoCqgZEC0DVgGgJqBoQLQFVA6IloGpAtARUDYiWgKoB0RJQNSBaAKoGRGtA' +
-  '1YBoDaweAGKQRs3wFwPMAAAAAElFTkSuQmCC';
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAg0lEQVR42u3XsQ2AMAxE0SzDFIzDJqxLTxs6BBYn5xKIHeFIbkDxfyWk5PnM657fGpMojekRh4ie8UfEvwEW8RsiAOjl9dQGtB2+AXIBAym95x/ALmTBPgDTsuXSkUd7rs14ABRkw+MDJKT2fjOgdQIQgPOzzDQeAAsE/D0zjX+JQY0DaNZ5rq30z1sAAAAASUVORK5CYII=';
 
 const IS_WIN = process.platform === 'win32';
 
