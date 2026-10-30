@@ -1,13 +1,13 @@
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json* ./
 RUN npm install
 COPY web/ ./
 RUN npm run build
 
-FROM node:20-alpine
+FROM node:22-alpine
 WORKDIR /app
-RUN apk add --no-cache python3 make g++ sqlite-dev
+RUN apk add --no-cache python3 make g++
 COPY server/package.json server/package-lock.json* ./server/
 RUN cd server && npm install --omit=dev
 COPY server/ ./server/
