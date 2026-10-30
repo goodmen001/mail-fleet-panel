@@ -104,7 +104,7 @@ jobs:
             --outfile=pkg/sea-entry.cjs --supported:import-meta=false \
             --inject:tools/dirname-shim.js \
             --define:process.env.PANEL_SEA='"1"' \
-            --define:process.env.APP_VERSION='"${APP_VERSION}"' \
+            --define:process.env.APP_VERSION="\"${APP_VERSION}\"" \
             --define:import.meta.url='"file:///app/index.js"'
           python tools/patch-panel.py pkg/sea-entry.cjs
           # sanity: bundle must have patched paths (esbuild escapes non-ASCII to \uXXXX)
