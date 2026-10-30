@@ -126,7 +126,10 @@ export default async function (app) {
     }
   });
 
-  // probe a CF proxy prefix / direct line with a tiny API call (no config change)
+  // probe a CF proxy prefix / direct line (no config change). Uses the SAME
+  // path shape cf-proxy produces in custom mode (<prefix>/api.cloudflare.com/…)
+  // so a prefix that only proxies part of the URL fails here like it would
+  // for real requests, and requires a CF-shaped JSON response.
   app.post('/cfproxy/test', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
     const { prefix } = req.body || {};
     const url = `https://api.cloudflare.com/client/v4/user/tokens/verify`;
@@ -136,8 +139,17 @@ export default async function (app) {
     try {
       const res = await fetch(target, { headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal });
       const body = await res.text().catch(() => '');
-      // any HTTP response (even 400/401 from CF) means the LINE works
-      return { code: 200, data: { ok: true, status: res.status, cf: body.includes('"success"') } };
+      let cf = null;
+      try { cf = JSON.parse(body); } catch { /* not JSON → bad proxy */ }
+      return {
+        code: 200,
+        data: {
+          ok: !!cf && typeof cf.success === 'boolean' && res.status < 500,
+          status: res.status,
+          cf: !!cf,
+          error: cf ? undefined : '响应不是 Cloudflare API 格式（反代可能只代理了部分路径）'
+        }
+      };
     } catch (e) {
       return { code: 200, data: { ok: false, status: 0, error: e.message } };
     } finally { clearTimeout(timer); }

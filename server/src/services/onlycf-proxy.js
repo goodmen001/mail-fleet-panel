@@ -17,14 +17,18 @@ export const PROXY_HOST_PREFIX = 'onlycf.';
 
 // the worker source: transparent api.cloudflare.com relay. ESM module worker.
 const WORKER_SRC = `// onlycf — Cloudflare API reverse proxy (deployed by Mail Fleet Panel)
-// Forwards /client/v4/* to api.cloudflare.com. Anything else → 403.
+// Accepts both /client/v4/* and the panel's custom-prefix style
+// /api.cloudflare.com/client/v4/*, forwarding to api.cloudflare.com.
+// Anything else → 403.
 export default {
   async fetch(request) {
     const url = new URL(request.url);
-    if (url.pathname.indexOf('/client/v4') !== 0) {
+    let p = url.pathname;
+    if (p.indexOf('/api.cloudflare.com/') === 0) p = p.slice('/api.cloudflare.com'.length);
+    if (p.indexOf('/client/v4') !== 0) {
       return new Response('forbidden', { status: 403 });
     }
-    const target = 'https://api.cloudflare.com' + url.pathname + url.search;
+    const target = 'https://api.cloudflare.com' + p + url.search;
     const headers = new Headers(request.headers);
     headers.set('Host', 'api.cloudflare.com');
     const res = await fetch(target, {
