@@ -13,6 +13,7 @@
           </router-link>
         </template>
       </nav>
+      <div class="ver">v{{ appVersion }}</div>
       <div class="foot" @click="logout">
         <Icon icon="mdi:logout" width="18" height="18"/>
         <span>退出</span>
@@ -44,7 +45,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Icon } from '@iconify/vue'
@@ -72,6 +73,15 @@ const menus = [
   { path: '/version', icon: 'mdi:source-branch', title: '版本中心' },
   { path: '/users', icon: 'mdi:account-group-outline', title: '用户管理', admin: true },
 ]
+
+// version comes from the server (package.json at build time); plain axios to avoid cycles
+const appVersion = ref('…')
+onMounted(async () => {
+  try {
+    const { data } = await axios.get('/api/version/app')
+    appVersion.value = data.data?.version || '?'
+  } catch { appVersion.value = '?' }
+})
 
 function logout() {
   localStorage.removeItem('panel_token')
@@ -113,6 +123,7 @@ nav { flex: 1; margin-top: 12px; display: flex; flex-direction: column; gap: 4px
   color: #6b7280; cursor: pointer; padding: 11px 12px; font-size: 13px;
 }
 .foot:hover { color: #f87171; }
+.ver { color: #4b5563; font-size: 11px; text-align: center; padding-bottom: 6px; font-family: monospace; }
 .main { flex: 1; display: flex; flex-direction: column; }
 .topbar {
   height: 56px; display: flex; align-items: center; justify-content: space-between;

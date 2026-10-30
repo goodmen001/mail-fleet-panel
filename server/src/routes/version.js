@@ -10,6 +10,19 @@ import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh
 
 const REPO = 'maillab/cloud-mail';
 const BRANCH = 'main';
+// fallback when APP_VERSION env is absent (dev mode): package.json lives two levels
+// above the data dir in dev (server/data → server/../package.json) and next to the
+// exe's data dir in SEA builds (env APP_VERSION is set there anyway)
+const APP_VERSION = (() => {
+  const candidates = [
+    process.env.PANEL_SEA ? path.join(path.dirname(process.execPath), 'package.json') : null,
+    path.join(dataDir, '..', '..', 'package.json')
+  ].filter(Boolean);
+  for (const p of candidates) {
+    try { return JSON.parse(fs.readFileSync(p, 'utf8')).version || null; } catch { /* next */ }
+  }
+  return null;
+})();
 
 const GH_HEADERS = () => ({
   'User-Agent': 'mail-fleet-panel',
@@ -62,6 +75,9 @@ async function extractZipTo(buf, dest) {
 }
 
 export default async function (app) {
+  // panel's own version (package.json at build time) — shown in the sidebar
+  app.get('/app', async () => ({ code: 200, data: { version: process.env.APP_VERSION || APP_VERSION } }));
+
   // ---- GitHub acceleration proxy config (v28) ----
   app.get('/proxy', { preHandler: [app.auth] }, async () => {
     const cfg = getGhConfig();
