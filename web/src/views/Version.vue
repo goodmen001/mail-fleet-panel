@@ -1,6 +1,43 @@
 <template>
   <div>
-    <div class="tech-card">
+    <div class="tech-card" style="margin-top:20px">
+      <div class="tech-title">
+        <Icon icon="mdi:fast-forward-outline"/>GitHub 加速代理
+        <el-button size="small" type="primary" style="margin-left:auto" @click="saveProxy" :loading="proxySaving">保存配置</el-button>
+      </div>
+      <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
+        title="导入官方包、在线更新、GitHub 同步都会经过这里配置的线路。访问 GitHub 受限时可选内置加速镜像或填入自建代理（如 Cloudflare Worker 反代）。"/>
+      <el-form label-width="100px" style="max-width:640px">
+        <el-form-item label="线路模式">
+          <el-radio-group v-model="proxy.mode">
+            <el-radio value="auto">自动（直连优先，失败切镜像）</el-radio>
+            <el-radio value="direct">仅直连</el-radio>
+            <el-radio value="mirror">仅镜像</el-radio>
+            <el-radio value="custom">自定义代理</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="自定义代理" v-if="proxy.mode === 'custom'">
+          <el-input v-model="proxy.customUrl" placeholder="例如 https://你的反代域名/（须能代理整个 GitHub URL）"/>
+        </el-form-item>
+        <el-form-item label="内置镜像">
+          <div class="mirror-list">
+            <div v-for="m in proxy.mirrors" :key="m" class="mirror-item">
+              <span class="mirror-url">{{ m }}</span>
+              <el-tag v-if="m === proxy.lastGood" size="small" type="success" effect="dark">当前可用</el-tag>
+              <el-button size="small" link type="primary" @click="testProxy(m)">测速</el-button>
+            </div>
+          </div>
+        </el-form-item>
+        <el-form-item label="连接测试">
+          <el-button size="small" @click="testProxy('')">测试直连</el-button>
+          <span v-if="testResult" :style="{color: testResult.ok ? '#34d399' : '#f87171', fontSize: '12px', marginLeft: '8px'}">
+            {{ testResult.ok ? '✓ 连接成功 (HTTP ' + testResult.status + ')' : '✗ 连接失败' + (testResult.error ? '：' + testResult.error : ' (HTTP ' + testResult.status + ')') }}
+          </span>
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <div class="tech-card" style="margin-top:20px">
       <div class="tech-title"><Icon icon="mdi:source-branch"/>上游版本检查</div>
       <el-button type="primary" size="small" @click="check" :loading="checking" style="margin-bottom:14px">检查更新</el-button>
       <div v-if="info" class="ver-info">
@@ -278,6 +315,38 @@ async function doGhSync(pkg, rel) {
 
 const short = s => s ? s.slice(0, 7) : ''
 
+// ---- GitHub acceleration proxy config ----
+const proxy = ref({ mode: 'auto', customUrl: '', lastGood: '', mirrors: [] })
+const proxySaving = ref(false)
+const testResult = ref(null)
+
+async function loadProxy() {
+  try {
+    const { data } = await axios.get('/version/proxy')
+    proxy.value = { ...proxy.value, ...data.data }
+  } catch { /* older server build — hide gracefully */ }
+}
+
+async function saveProxy() {
+  proxySaving.value = true
+  try {
+    await axios.post('/version/proxy', { mode: proxy.value.mode, customUrl: proxy.value.customUrl })
+    ElMessage.success('已保存')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '保存失败')
+  } finally { proxySaving.value = false }
+}
+
+async function testProxy(prefix) {
+  testResult.value = null
+  try {
+    const { data } = await axios.post('/version/proxy/test', { prefix })
+    testResult.value = data.data
+  } catch (e) {
+    testResult.value = { ok: false, error: e.response?.data?.message || '请求失败' }
+  }
+}
+
 async function check() {
   checking.value = true
   try {
@@ -312,7 +381,7 @@ async function delCustom(row) {
   load()
 }
 
-onMounted(() => { load(); loadPkgs() })
+onMounted(() => { load(); loadPkgs(); loadProxy() })
 </script>
 
 <style scoped>
@@ -326,4 +395,7 @@ onMounted(() => { load(); loadPkgs() })
   background: rgba(255,255,255,.03);
 }
 .file-item.conflict { background: rgba(248,113,113,.1); color: #f87171; }
+.mirror-list { display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.mirror-item { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mirror-url { font-family: monospace; color: #9aa4b2; }
 </style>

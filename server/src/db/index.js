@@ -119,3 +119,11 @@ CREATE TABLE IF NOT EXISTS pkg_version (
 for (const t of ['site', 'deploy_record', 'cf_credential']) {
   try { db.exec(`ALTER TABLE ${t} ADD COLUMN owner_id INTEGER`); } catch { /* exists */ }
 }
+
+// v28: key/value settings (GitHub proxy mode + custom mirror url)
+db.exec(`
+CREATE TABLE IF NOT EXISTS panel_setting (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
+`);

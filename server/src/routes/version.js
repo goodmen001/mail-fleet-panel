@@ -6,14 +6,18 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import tar from 'tar-stream';
+import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh-proxy.js';
 
 const REPO = 'maillab/cloud-mail';
 const BRANCH = 'main';
 
+const GH_HEADERS = () => ({
+  'User-Agent': 'mail-fleet-panel',
+  ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {})
+});
+
 async function gh(path) {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/${path}`, {
-    headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-  });
+  const res = await ghFetch(`https://api.github.com/repos/${REPO}/${path}`, { headers: GH_HEADERS() });
   if (!res.ok) throw new Error(`GitHub API ${path}: ${res.status}`);
   return res.json();
 }
@@ -21,12 +25,11 @@ async function gh(path) {
 // same but against the panel's own repo (custom packages built by CI)
 function ghSelf(path) {
   const repo = process.env.PANEL_GITHUB_REPO || 'goodmen001/mail-fleet-panel';
-  return fetch(`https://api.github.com/repos/${repo}/${path}`, {
-    headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-  }).then(r => {
-    if (!r.ok) throw new Error(`GitHub API ${path}: ${r.status}`);
-    return r.json();
-  });
+  return ghFetch(`https://api.github.com/repos/${repo}/${path}`, { headers: GH_HEADERS() })
+    .then(r => {
+      if (!r.ok) throw new Error(`GitHub API ${path}: ${r.status}`);
+      return r.json();
+    });
 }
 
 // packages live under DATA_DIR/packages/<pkg_id> (also mirrors the Windows
@@ -59,6 +62,36 @@ async function extractZipTo(buf, dest) {
 }
 
 export default async function (app) {
+  // ---- GitHub acceleration proxy config (v28) ----
+  app.get('/proxy', { preHandler: [app.auth] }, async () => {
+    const cfg = getGhConfig();
+    return { code: 200, data: { ...cfg, mirrors: KNOWN_MIRRORS } };
+  });
+
+  app.post('/proxy', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    try {
+      setGhConfig(req.body || {});
+      return { code: 200, message: 'GitHub 加速配置已保存' };
+    } catch (e) {
+      return reply.code(400).send({ code: 400, message: e.message });
+    }
+  });
+
+  // probe a mirror/prefix with a tiny API call (does NOT change saved config)
+  app.post('/proxy/test', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const { prefix } = req.body || {};
+    const url = `https://api.github.com/rate_limit`;
+    const target = prefix ? prefix + url.replace(/^https?:\/\//, '') : url;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(target, { headers: GH_HEADERS(), signal: ctrl.signal });
+      return { code: 200, data: { ok: res.ok, status: res.status } };
+    } catch (e) {
+      return { code: 200, data: { ok: false, status: 0, error: e.message } };
+    } finally { clearTimeout(timer); }
+  });
+
   // custom file registry (upstream-diff tracking, unchanged)
   app.get('/customs', { preHandler: [app.auth] }, async () => {
     const list = db.prepare('SELECT * FROM custom_file ORDER BY path').all();
@@ -184,9 +217,7 @@ export default async function (app) {
     fs.mkdirSync(work, { recursive: true });
     try {
       // 1. download the release source tarball
-      const res = await fetch(`https://api.github.com/repos/${REPO}/tarball/${encodeURIComponent(rel.tag_name)}`, {
-        headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-      });
+      const res = await ghFetch(`https://api.github.com/repos/${REPO}/tarball/${encodeURIComponent(rel.tag_name)}`, { headers: GH_HEADERS() }, { timeoutMs: 300000 });
       if (!res.ok) throw new Error(`下载源码失败: HTTP ${res.status}`);
       // 2. untar (strip the top-level maillab-cloud-mail-<sha>/ component)
       const extract = tar.extract();
@@ -286,9 +317,7 @@ export default async function (app) {
         tag = rel.tag_name;
         version = tag.replace(/^v/, '');
         srcNote = `上游 ${tag}`;
-        const res = await fetch(`https://api.github.com/repos/${REPO}/tarball/${encodeURIComponent(tag)}`, {
-          headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-        });
+        const res = await ghFetch(`https://api.github.com/repos/${REPO}/tarball/${encodeURIComponent(tag)}`, { headers: GH_HEADERS() }, { timeoutMs: 300000 });
         if (!res.ok) throw new Error(`下载源码失败: HTTP ${res.status}`);
         const work = path.join(stage, '_build');
         const extract = tar.extract();
@@ -331,9 +360,7 @@ export default async function (app) {
         if (!asset) throw new Error('GitHub Release 上未找到 custom-worker-dist-*.zip，无法在线更新');
         version = (asset.name.match(/(\d+\.\d+\.\d+)/) || [])[1] || null;
         srcNote = `GitHub ${asset.name}`;
-        const res = await fetch(asset.url, {
-          headers: { 'User-Agent': 'mail-fleet-panel', Accept: 'application/octet-stream', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-        });
+        const res = await ghFetch(asset.url, { headers: { Accept: 'application/octet-stream', ...GH_HEADERS() } }, { timeoutMs: 300000 });
         if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`);
         const buf = Buffer.from(await res.arrayBuffer());
         const { extractZip } = await import('./zip-extract.mjs');
@@ -372,9 +399,7 @@ export default async function (app) {
 
   app.get('/pkgs/github-releases', { preHandler: [app.auth] }, async (req, reply) => {
     try {
-      const res = await fetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, {
-        headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-      });
+      const res = await ghFetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, { headers: GH_HEADERS() });
       if (!res.ok) throw new Error(`GitHub API ${res.status}`);
       const releases = await res.json();
       return {
@@ -407,9 +432,7 @@ export default async function (app) {
     if (m[2]) {
       // browser URL → API asset URL (API + Accept: octet-stream handles private repos too)
       const assetName = m[2];
-      const rel = await fetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, {
-        headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
-      });
+      const rel = await ghFetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, { headers: GH_HEADERS() });
       const rels = rel.ok ? await rel.json() : [];
       let assetId = null;
       for (const r of rels) {
@@ -420,13 +443,7 @@ export default async function (app) {
       assetUrl = `https://api.github.com/repos/${SELF_REPO}/releases/assets/${assetId}`;
     }
     try {
-      const res = await fetch(assetUrl, {
-        headers: {
-          'User-Agent': 'mail-fleet-panel',
-          Accept: 'application/octet-stream',
-          ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {})
-        }
-      });
+      const res = await ghFetch(assetUrl, { headers: { Accept: 'application/octet-stream', ...GH_HEADERS() } }, { timeoutMs: 300000 });
       if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
       const assetName = name || '';

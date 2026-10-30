@@ -65,6 +65,45 @@ const MIME = {
   '.xml': 'application/xml', '.wasm': 'application/wasm'
 };
 
+// assets upload session + missing-file upload, shared by deploy & upgrade
+async function uploadAssets(headers, accountId, workerName, workerDistDir, step) {
+  step('上传静态资源');
+  const manifest = buildAssetManifest(workerDistDir);
+  step(`静态资源 ${Object.keys(manifest).length} 个文件`);
+  const session = await cf(headers, 'POST', `/accounts/${accountId}/workers/scripts/${workerName}/assets-upload-session`, { manifest });
+  let completionJwt = session.jwt;
+  // CF returns buckets as [[hashStr,...],...] or [[{hash},...],...] depending on API version — accept both
+  const missing = (session.buckets || []).flat().map(e => typeof e === 'string' ? { hash: e } : e).filter(e => e && e.hash);
+  if (missing.length) {
+    step(`需上传 ${missing.length} 个资源文件`);
+    // hash → path index (case-insensitive compare, CF sometimes normalizes case)
+    const byHash = new Map();
+    for (const k of Object.keys(manifest)) byHash.set(manifest[k].hash.toLowerCase(), k.slice(1));
+    const form = new FormData();
+    for (const entry of missing) {
+      const relPath = byHash.get(String(entry.hash).toLowerCase());
+      if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
+      const buf = fs.readFileSync(path.join(workerDistDir, relPath));
+      form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
+    }
+    const up = await fetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+      method: 'POST', headers: { ...headers, Authorization: `Bearer ${session.jwt}` }, body: form
+    });
+    const j = await up.json();
+    if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
+    completionJwt = j.result?.jwt || completionJwt;
+  }
+  return completionJwt;
+}
+
+async function putWorkerScript(headers, accountId, workerName, workerDistDir, metadata) {
+  const workerJs = fs.readFileSync(path.join(workerDistDir, 'worker.js'));
+  const form = new FormData();
+  form.append('metadata', JSON.stringify(metadata));
+  form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
+  await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
+}
+
 export async function deployCloudMail(headers, accountId, domain, adminEmail, onStep, workerDistDir) {
   const step = (msg) => onStep?.(msg);
   const rnd = () => Math.random().toString(36).slice(2, 10);
@@ -92,37 +131,9 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
     r2 = await cf(headers, 'POST', `/accounts/${accountId}/r2/buckets`, { name: `cloud-mail-${rnd()}` });
   } catch { step('R2 创建跳过（可选）'); }
 
-  // 4. assets upload session
-  step('上传静态资源');
-  const manifest = buildAssetManifest(workerDistDir);
-  step(`静态资源 ${Object.keys(manifest).length} 个文件`);
-  const session = await cf(headers, 'POST', `/accounts/${accountId}/workers/scripts/${workerName}/assets-upload-session`, { manifest });
-  let completionJwt = session.jwt;
-  // CF returns buckets as [[hashStr,...],...] or [[{hash},...],...] depending on API version — accept both
-  const missing = (session.buckets || []).flat().map(e => typeof e === 'string' ? { hash: e } : e).filter(e => e && e.hash);
-  if (missing.length) {
-    step(`需上传 ${missing.length} 个资源文件`);
-    // hash → path index (case-insensitive compare, CF sometimes normalizes case)
-    const byHash = new Map();
-    for (const k of Object.keys(manifest)) byHash.set(manifest[k].hash.toLowerCase(), k.slice(1));
-    const form = new FormData();
-    for (const entry of missing) {
-      const relPath = byHash.get(String(entry.hash).toLowerCase());
-      if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
-      const buf = fs.readFileSync(path.join(workerDistDir, relPath));
-      form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
-    }
-    const up = await fetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
-      method: 'POST', headers: { ...headers, Authorization: `Bearer ${session.jwt}` }, body: form
-    });
-    const j = await up.json();
-    if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
-    completionJwt = j.result?.jwt || completionJwt;
-  }
-
-  // 5. bundle the worker entry and upload as ESM module with assets completion JWT
+  // 4-5. assets + worker script (shared with the upgrade path)
+  const completionJwt = await uploadAssets(headers, accountId, workerName, workerDistDir, step);
   step('上传 Worker');
-  const workerJs = fs.readFileSync(path.join(workerDistDir, 'worker.js'));
   const metadata = {
     main_module: 'worker.js',
     compatibility_date: '2025-06-04',
@@ -147,10 +158,7 @@ export async function deployCloudMail(headers, accountId, domain, adminEmail, on
     },
     observability: { enabled: true }
   };
-  const form = new FormData();
-  form.append('metadata', JSON.stringify(metadata));
-  form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
-  await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
+  await putWorkerScript(headers, accountId, workerName, workerDistDir, metadata);
 
   // 6. custom domain + email routing — the WEBSITE lives on mail.<domain>;
   //    the apex/zone is only used for Email Routing (@<domain> addresses)
@@ -229,4 +237,60 @@ export async function initDeployedSite(siteUrl, adminEmail, adminPassword, jwtSe
   }).catch(e => step('关闭注册提示: ' + e.message));
 
   return { success: true, token };
+}
+
+// ---- in-place upgrade of an already-deployed cloud-mail worker ----
+// Reads the CURRENT script settings (bindings incl. d1/kv/r2 ids and the
+// jwt_secret/admin/domain plain_text vars) and re-uploads the new worker.js
+// with identical bindings. D1/KV data is untouched; cloud-mail's schema init
+// and migrations are idempotent (CREATE TABLE IF NOT EXISTS + guarded ALTERs),
+// so users / emails / settings survive the upgrade. No /api/init call needed.
+export async function upgradeDeployedMail(headers, accountId, workerName, workerDistDir, onStep) {
+  const step = (msg) => onStep?.(msg);
+
+  // 1. read current bindings (plain_text vars incl. jwt_secret are returned here)
+  step('读取现有 Worker 配置');
+  const settings = await cf(headers, 'GET', `/accounts/${accountId}/workers/scripts/${workerName}/settings`);
+  const bindings = (settings.bindings || []).filter(b =>
+    b.type === 'd1' || b.type === 'kv_namespace' || b.type === 'r2_bucket' ||
+    b.type === 'send_email' || b.type === 'ai' || b.type === 'assets' ||
+    b.type === 'plain_text' || b.type === 'json'
+  );
+  const plain = {};
+  for (const b of bindings) if (b.type === 'plain_text') plain[b.name] = b.text;
+  if (bindings.some(b => b.type === 'd1') && !plain.jwt_secret) {
+    // jwt_secret is masked in some API versions — without it every existing
+    // login token breaks, so refuse rather than corrupt the site
+    throw new Error('无法读回 jwt_secret（API 返回被遮蔽），升级已中止以免丢失登录态');
+  }
+  const oldAssets = bindings.find(b => b.type === 'assets');
+  if (!oldAssets) throw new Error('原 Worker 缺少 assets 绑定，不是面板部署的 cloud-mail，已中止');
+
+  // 2. upload new assets + worker with the SAME bindings
+  const completionJwt = await uploadAssets(headers, accountId, workerName, workerDistDir, step);
+  step('上传新版 Worker（保留原数据绑定）');
+  const metadata = {
+    main_module: 'worker.js',
+    compatibility_date: settings.compatibility_date || '2025-06-04',
+    compatibility_flags: settings.compatibility_flags || [],
+    bindings,
+    keep_bindings: ['plain_text', 'json'],
+    assets: {
+      jwt: completionJwt,
+      config: settings.assets?.config || { html_handling: 'auto-trailing-slash', not_found_handling: 'single-page-application', run_worker_first: true }
+    },
+    observability: { enabled: true }
+  };
+  await putWorkerScript(headers, accountId, workerName, workerDistDir, metadata);
+  step('升级完成：D1/KV 数据未触碰，邮件与用户数据全部保留');
+  return { success: true, workerName };
+}
+
+// detect whether mail.<domain> is already served by a Worker on this account
+// (i.e. the domain has been deployed before) — used to auto-pick upgrade mode
+export async function findDeployedWorker(headers, accountId, domain) {
+  const siteDomain = `mail.${domain}`;
+  const domains = await cf(headers, 'GET', `/accounts/${accountId}/workers/domains`);
+  const hit = (domains || []).find(d => d.hostname === siteDomain);
+  return hit ? { workerName: hit.service, siteDomain } : null;
 }

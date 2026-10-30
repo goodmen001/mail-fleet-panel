@@ -31,7 +31,7 @@
         </el-button>
       </div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:16px"
-        title="部署内容：D1 数据库 + KV + Worker + 自定义域名 + Email Routing，全自动一条龙。选择凭证后自动带出该账号下的域名；每个域名可单独指定管理员邮箱，不同 Cloudflare 账号可分开配置。"/>
+        title="部署内容：D1 数据库 + KV + Worker + 自定义域名 + Email Routing，全自动一条龙。选择凭证后自动带出该账号下的域名；每个域名可单独指定管理员邮箱，不同 Cloudflare 账号可分开配置。已部署过的域名会自动识别为升级：只更新邮局版本，原有邮件/用户/配置数据全部保留。"/>
 
       <el-form-item label="部署包" label-width="80px" style="margin-bottom:14px">
         <el-select v-model="pkgId" placeholder="使用面板内置定制包" style="width:320px" clearable>
@@ -63,13 +63,19 @@
               </el-select>
             </template>
           </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{row}">
+              <el-tag v-if="row.deployed" size="small" type="warning" effect="dark">已部署·升级</el-tag>
+              <el-tag v-else-if="row.checked" size="small" type="info" effect="plain">新部署</el-tag>
+            </template>
+          </el-table-column>
           <el-table-column label="管理员邮箱" min-width="240">
             <template #default="{row}">
               <el-input v-model="row.adminEmail" placeholder="该域名站点的管理员邮箱，如 mail@域名"/>
             </template>
           </el-table-column>
           <el-table-column label="" width="60">
-            <template #default="{$index}">
+            <template #default="{row, $index}">
               <el-button size="small" type="danger" link @click="g.rows.splice($index,1)">删</el-button>
             </template>
           </el-table-column>
@@ -96,12 +102,15 @@
             <span v-else>{{ row.domain }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="100">
           <template #default="{row}">
             <el-tag size="small" effect="dark" :type="row.status === 'success' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'">
               {{ row.status === 'success' ? '成功' : row.status === 'failed' ? '失败' : '进行中' }}
             </el-tag>
           </template>
+        </el-table-column>
+        <el-table-column prop="pkg_id" label="包" width="90">
+          <template #default="{row}">{{ row.pkg_id === -1 ? '内置官方' : row.pkg_id ? '版本中心' : '内置定制' }}</template>
         </el-table-column>
         <el-table-column prop="create_time" label="时间" width="160"/>
         <el-table-column label="日志" min-width="300">
@@ -205,6 +214,14 @@ async function onCredChange(g) {
     const { data } = await axios.get('/credential/zones', { params: { credId: g.credId } })
     g.zones = data.data || []
     prefillRows(g)
+    // preflight: mark domains that already have a cloud-mail worker (upgrade path)
+    try {
+      const { data: cd } = await axios.post('/deploy/check', { credId: g.credId, domains: g.zones.map(z => z.name) })
+      for (const row of g.rows) {
+        row.checked = true
+        row.deployed = !!(cd.data?.[row.domain]?.deployed)
+      }
+    } catch { /* preflight is advisory only */ }
   } catch (e) {
     g.zoneError = e.response?.data?.message || '拉取域名失败'
   } finally { g.loadingZones = false }

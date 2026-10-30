@@ -2,7 +2,7 @@ import db, { encrypt } from '../db/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deployCloudMail, initDeployedSite } from '../services/deploy-service.js';
+import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
 // the built-in packages ship with the installation (exe: data/…-dist next to
@@ -45,6 +45,30 @@ function resolvePkgDir(pkgId) {
 }
 
 export default async function (app) {
+  const isAdminCheck = (req) => req.user.role === 'admin';
+  // preflight: which of these domains already have a cloud-mail worker on the
+  // account (those will be UPGRADED in place instead of fresh-deployed)
+  app.post('/check', { preHandler: [app.auth] }, async (req, reply) => {
+    const { credId, accountId, domains } = req.body || {};
+    if (!credId || !Array.isArray(domains)) return reply.code(400).send({ code: 400, message: 'credId + domains[] 必填' });
+    const credRow = db.prepare('SELECT * FROM cf_credential WHERE cred_id = ?').get(credId);
+    if (!credRow) return reply.code(404).send({ code: 404, message: `凭证 ${credId} 不存在` });
+    if (!isAdminCheck(req) && credRow.owner_id !== req.user.uid) return reply.code(403).send({ code: 403, message: '凭证不属于你' });
+    const accId = accountId || accountIdOf(credId);
+    if (!accId) return reply.code(400).send({ code: 400, message: '凭证缺少 Account ID' });
+    const result = {};
+    const headers = credentialHeaders(credId);
+    for (const d of domains) {
+      try {
+        const hit = await findDeployedWorker(headers, accId, d);
+        result[d] = hit ? { deployed: true, workerName: hit.workerName, siteDomain: hit.siteDomain } : { deployed: false };
+      } catch (e) {
+        result[d] = { deployed: false, error: e.message };
+      }
+    }
+    return { code: 200, data: result };
+  });
+
   // start a batch deployment
   // body: { items: [{ credId, accountId?, pkgId?, domains: [{ domain, adminEmail }] }] }
   //   OR legacy: { credId, pkgId?, domains: [string], adminEmail }
@@ -107,12 +131,22 @@ export default async function (app) {
       }
     }
 
-    // run async, log steps; on success auto-register admin + add to site manager
+    // run async, log steps; fresh deploy auto-registers admin + adds to site
+    // manager, an existing deployment is upgraded in place (data preserved)
     jobs.forEach(j => {
       const steps = [];
       const step = (msg) => steps.push({ t: Date.now(), msg });
       (async () => {
         step(`开始部署 ${j.domain}（部署包：${j.pkgName}${j.pkgTag ? ' ' + j.pkgTag : ''}）`);
+        // already deployed? → in-place upgrade: reuse the SAME worker + bindings
+        const existing = await findDeployedWorker(j.headers, j.accountId, j.domain);
+        if (existing) {
+          step(`检测到 ${existing.siteDomain} 已部署过（Worker: ${existing.workerName}），进入升级模式`);
+          const ur = await upgradeDeployedMail(j.headers, j.accountId, existing.workerName, j.pkgDir, step);
+          db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
+            .run('success', JSON.stringify(steps), j.recordId);
+          return;
+        }
         const r = await deployCloudMail(j.headers, j.accountId, j.domain, j.adminEmail, step, j.pkgDir);
         if (r.siteUrl) {
           // initial admin password for the new site
