@@ -1,24 +1,31 @@
-import db, { encrypt } from '../db/index.js';
+import db, { encrypt, dataDir } from '../db/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerDeep } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
-// the built-in packages ship with the installation (exe: data/…-dist next to
-// the exe; docker/node: /app/data/…-dist)
+// the built-in packages ship with the installation. They must NOT live under
+// the data dir: a Docker volume mount (./data:/app/data) hides whatever the
+// image put in /app/data, and users replacing/restoring data/ would lose the
+// packages too — both surfaced as "部署包缺失：…data/worker-dist…". Search
+// order: explicit env → install-dir builtin/ (exe: builtin next to the exe,
+// docker: /app/builtin) → legacy data/<sub> (old installs still work) →
+// repo-relative (dev checkout).
 function builtinDist(sub) {
+  const exeDir = process.env.PANEL_SEA ? path.dirname(process.execPath) : null;
   const candidates = [
     process.env[sub === 'official-dist' ? 'OFFICIAL_DIST' : 'WORKER_DIST'],
-    process.env.PANEL_SEA ? path.join(path.dirname(process.execPath), 'data', sub) : null,
-    path.join(process.cwd(), 'data', sub),
+    exeDir && path.join(exeDir, 'builtin', sub),
+    !process.env.PANEL_SEA && path.join(process.cwd(), 'builtin', sub),
+    path.join(dataDir, sub),
     // dev mode: panel started from server/ while data lives at repo root
     path.join(process.cwd(), '..', 'data', sub)
   ].filter(Boolean);
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, 'worker.js'))) return dir;
   }
-  return candidates[candidates.length - 1];
+  return candidates[0];
 }
 
 // resolve the deploy dir for a job: explicit pkgId from the version center,

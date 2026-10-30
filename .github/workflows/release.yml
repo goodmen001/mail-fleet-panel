@@ -127,12 +127,15 @@ jobs:
           # GUI subsystem: no console window on double-click
           python tools/patch-pe-gui.py pkg/mail-fleet-panel.exe --inplace
           rm -f pkg/mail-fleet-panel.exe.console.bak
-          # deploy packages shipped beside the exe
-          mkdir -p pkg/data/worker-dist pkg/data/official-dist
-          cp data/worker-dist/worker.js pkg/data/worker-dist/
+          # deploy packages shipped beside the exe (builtin/, not data/ — a
+          # replaced/restored data dir must not lose them; data/ copies kept
+          # as legacy fallback for older panel code)
+          mkdir -p pkg/builtin/worker-dist pkg/builtin/official-dist pkg/data/worker-dist pkg/data/official-dist
+          cp -r data/worker-dist/. pkg/builtin/worker-dist/
+          cp -r data/official-dist/. pkg/builtin/official-dist/ 2>/dev/null || true
           cp -r data/worker-dist/. pkg/data/worker-dist/
-          # official deploy package: built by the `official` job (upstream release)
           if [ -f official/official-dist/worker.js ]; then
+            cp -r official/official-dist/. pkg/builtin/official-dist/
             cp -r official/official-dist/. pkg/data/official-dist/
           else
             echo "WARN: official dist missing, zip continues without it"
@@ -149,6 +152,9 @@ jobs:
           mkdir -p pkg/web
           cp -r web/dist pkg/web/dist
           cp tools/win-README.txt pkg/README.txt
+          test -f pkg/builtin/worker-dist/worker.js
+          test -f pkg/builtin/worker-dist/index.html
+          test -f pkg/builtin/official-dist/worker.js
           test -f pkg/data/worker-dist/worker.js
           test -f pkg/data/worker-dist/index.html
           VERSION=${APP_VERSION}

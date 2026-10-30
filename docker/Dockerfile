@@ -12,8 +12,10 @@ COPY server/package.json server/package-lock.json* ./server/
 RUN cd server && npm install --omit=dev
 COPY server/ ./server/
 COPY --from=build /app/web/dist ./web/dist
-# worker deploy bundle (same layout as the Windows package: data/worker-dist)
-COPY data/worker-dist ./data/worker-dist
+# worker deploy bundles (builtin/ is NOT under the data volume mount, so a
+# ./data:/app/data mount can no longer hide them — was data/worker-dist)
+COPY data/worker-dist ./builtin/worker-dist
+COPY data/official-dist ./builtin/official-dist
 ARG APP_VERSION=dev
 ENV NODE_ENV=production PORT=3300 DATA_DIR=/app/data APP_VERSION=${APP_VERSION}
 VOLUME /app/data
