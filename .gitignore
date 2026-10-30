@@ -5,3 +5,5 @@ data/
 !data/
 !data/worker-dist/
 !data/worker-dist/**
+sea-prep.blob
+pkg/

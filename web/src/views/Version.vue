@@ -112,6 +112,7 @@
         <el-table-column label="定制包" min-width="220">
           <template #default="{row}">
             <div v-for="p in row.packages" :key="p.name" style="display:flex;align-items:center;gap:8px">
+              <el-tag size="small" effect="dark" :type="p.kind === 'official' ? 'success' : 'warning'">{{ p.kind === 'official' ? '官方包' : '定制包' }}</el-tag>
               <span style="font-family:monospace;font-size:12px">{{ p.name }}</span>
               <el-button size="small" type="primary" link @click="doGhSync(p, row)">同步</el-button>
             </div>

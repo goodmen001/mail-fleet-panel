@@ -275,8 +275,8 @@ export default async function (app) {
           tag: r.tag_name,
           name: r.name,
           publishedAt: r.published_at,
-          packages: (r.assets || []).filter(a => /^custom-worker-dist-.*\.zip$/.test(a.name))
-            .map(a => ({ name: a.name, size: a.size, downloadUrl: a.browser_download_url }))
+          packages: (r.assets || []).filter(a => /^(custom|official)-worker-dist-.*\.zip$/.test(a.name))
+            .map(a => ({ name: a.name, kind: a.name.startsWith('official-') ? 'official' : 'custom', size: a.size, downloadUrl: a.browser_download_url }))
         })).filter(r => r.packages.length > 0)
       };
     } catch (e) {
@@ -288,11 +288,13 @@ export default async function (app) {
   // version center as a custom package (no build needed — CI built it)
   app.post('/pkgs/sync-github', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
     const { downloadUrl, name, note } = req.body || {};
-    // accept either the browser download URL or the API asset URL
+    // accept either the browser download URL or the API asset URL; both
+    // custom-worker-dist-*.zip and official-worker-dist-*.zip are supported
     const m = (downloadUrl || '').match(
-      new RegExp(`^https://(github\\.com/${SELF_REPO}/releases/download/[^/]+/(custom-worker-dist-[^/]+\\.zip)|api\\.github\\.com/repos/${SELF_REPO}/releases/assets/\\d+)`)
+      new RegExp(`^https://(github\\.com/${SELF_REPO}/releases/download/[^/]+/((?:custom|official)-worker-dist-[^/]+\\.zip)|api\\.github\\.com/repos/${SELF_REPO}/releases/assets/\\d+)`)
     );
-    if (!m) return reply.code(400).send({ code: 400, message: 'downloadUrl 必须是本仓库 Release 的资源地址' });
+    if (!m) return reply.code(400).send({ code: 400, message: 'downloadUrl 必须是本仓库 Release 的资源地址（custom/official-worker-dist-*.zip）' });
+    const kind = (m[2] || '').startsWith('official-') ? 'official' : 'custom';
     let assetUrl = downloadUrl;
     if (m[2]) {
       // browser URL → API asset URL (API + Accept: octet-stream handles private repos too)
@@ -319,10 +321,15 @@ export default async function (app) {
       });
       if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`);
       const buf = Buffer.from(await res.arrayBuffer());
-      const version = ((name || '').match(/custom-worker-dist-(\d+)-([0-9a-f]{7})\.zip/) || [])[1] || null;
+      const assetName = name || '';
+      // version/tag from the asset name: custom-worker-dist-<ver>.zip or
+      // official-worker-dist-<ver>+v3.4.0.zip (semver release naming)
+      const vm = assetName.match(/(?:custom|official)-worker-dist-(\d+\.\d+\.\d+)(?:\+(\S+))?\.zip/);
+      const version = vm ? vm[1] : null;
+      const tag = vm && vm[2] ? vm[2] : null;
 
       const info = db.prepare('INSERT INTO pkg_version (name, kind, version, tag, dir, note) VALUES (?,?,?,?,?,?)')
-        .run(name || 'GitHub 定制包', 'custom', version, null, '', note || `同步自 GitHub ${SELF_REPO}`);
+        .run(assetName || (kind === 'official' ? 'GitHub 官方包' : 'GitHub 定制包'), kind, version, tag, '', note || `同步自 GitHub ${SELF_REPO}`);
       const pkgId = info.lastInsertRowid;
       const dest = path.join(packagesRoot(), String(pkgId));
       fs.mkdirSync(dest, { recursive: true });
