@@ -1,4 +1,5 @@
 import db, { encrypt, decrypt } from '../db/index.js';
+import { cfFetch } from '../services/cf-proxy.js';
 
 function mask(row) {
   return { ...row, token: '••••••' + decrypt(row.token_enc).slice(-4), token_enc: undefined };
@@ -21,10 +22,8 @@ export const accountIdOf = (credId) =>
 // fetch the account id for a credential when the user left it blank:
 // tokens list /accounts; global keys use /accounts with X-Auth headers
 async function fetchAccountId(headers, kind) {
-  const url = kind === 'global_key'
-    ? 'https://api.cloudflare.com/client/v4/accounts?per_page=5'
-    : 'https://api.cloudflare.com/client/v4/accounts?per_page=5';
-  const res = await fetch(url, { headers });
+  const url = 'https://api.cloudflare.com/client/v4/accounts?per_page=5';
+  const res = await cfFetch(url, { headers });
   const j = await res.json();
   if (!j?.success || !j.result?.length) return null;
   return j.result[0].id;
@@ -54,9 +53,9 @@ export default async function (app) {
       : 'https://api.cloudflare.com/client/v4/user/tokens/verify';
     let j = null;
     try {
-      const res = await fetch(verifyUrl, { headers });
+      const res = await cfFetch(verifyUrl, { headers });
       j = await res.json();
-    } catch { return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API' }); }
+    } catch (e) { return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API: ' + e.message }); }
     if (!j?.success) {
       const label = kind === 'global_key' ? 'Global Key 校验失败' : 'Cloudflare Token 校验失败';
       return reply.code(400).send({ code: 400, message: label + '：' + (j?.errors?.[0]?.message || '响应异常') });
@@ -92,9 +91,9 @@ export default async function (app) {
         : 'https://api.cloudflare.com/client/v4/user/tokens/verify';
       let j = null;
       try {
-        const res = await fetch(verifyUrl, { headers });
+        const res = await cfFetch(verifyUrl, { headers });
         j = await res.json();
-      } catch { return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API' }); }
+      } catch (e) { return reply.code(400).send({ code: 400, message: '无法连接 Cloudflare API: ' + e.message }); }
       if (!j?.success) {
         const label = kind === 'global_key' ? 'Global Key 校验失败' : 'Cloudflare Token 校验失败';
         return reply.code(400).send({ code: 400, message: label + '：' + (j?.errors?.[0]?.message || '响应异常') });
@@ -131,7 +130,7 @@ export default async function (app) {
     try {
       let url = 'https://api.cloudflare.com/client/v4/zones?per_page=50';
       if (accountId) url += `&account.id=${accountId}`;
-      const res = await fetch(url, { headers });
+      const res = await cfFetch(url, { headers });
       const j = await res.json();
       if (!j.success) return reply.code(502).send({ code: 502, message: '拉取域名失败: ' + (j.errors?.[0]?.message || res.status) });
       return { code: 200, data: j.result.map(z => ({ name: z.name, status: z.status, accountId: z.account?.id, accountName: z.account?.name })) };

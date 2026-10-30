@@ -38,6 +38,34 @@
     </div>
 
     <div class="tech-card" style="margin-top:20px">
+      <div class="tech-title">
+        <Icon icon="mdi:cloud-braces"/>Cloudflare 加速代理
+        <el-button size="small" type="primary" style="margin-left:auto" @click="saveCfProxy" :loading="cfSaving">保存配置</el-button>
+      </div>
+      <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
+        title="凭证校验、域名拉取、批量部署都会经过这里配置的线路。无法连接 Cloudflare API 时，可填入自建反代地址（须能整站代理 api.cloudflare.com，如 Cloudflare Worker 反代）。"/>
+      <el-form label-width="100px" style="max-width:640px">
+        <el-form-item label="线路模式">
+          <el-radio-group v-model="cfProxy.mode">
+            <el-radio value="auto">自动（代理优先，失败切直连）</el-radio>
+            <el-radio value="direct">仅直连</el-radio>
+            <el-radio value="custom">自定义代理</el-radio>
+          </el-radio-group>
+        </el-form-item>
+        <el-form-item label="代理地址" v-if="cfProxy.mode === 'custom'">
+          <el-input v-model="cfProxy.customUrl" placeholder="例如 https://你的反代域名/（须能代理整个 api.cloudflare.com URL）"/>
+        </el-form-item>
+        <el-form-item label="连接测试">
+          <el-button size="small" @click="testCfProxy('')">测试直连</el-button>
+          <el-button size="small" @click="testCfProxy(cfProxy.customUrl)" :disabled="cfProxy.mode !== 'custom' || !cfProxy.customUrl">测试代理</el-button>
+          <span v-if="cfTestResult" :style="{color: cfTestResult.ok ? '#34d399' : '#f87171', fontSize: '12px', marginLeft: '8px'}">
+            {{ cfTestResult.ok ? '✓ 线路可用 (HTTP ' + cfTestResult.status + ')' : '✗ 线路不通' + (cfTestResult.error ? '：' + cfTestResult.error : '') }}
+          </span>
+        </el-form-item>
+      </el-form>
+    </div>
+
+    <div class="tech-card" style="margin-top:20px">
       <div class="tech-title"><Icon icon="mdi:source-branch"/>上游版本检查</div>
       <el-button type="primary" size="small" @click="check" :loading="checking" style="margin-bottom:14px">检查更新</el-button>
       <div v-if="info" class="ver-info">
@@ -347,6 +375,38 @@ async function testProxy(prefix) {
   }
 }
 
+// ---- Cloudflare acceleration proxy config ----
+const cfProxy = ref({ mode: 'auto', customUrl: '' })
+const cfSaving = ref(false)
+const cfTestResult = ref(null)
+
+async function loadCfProxy() {
+  try {
+    const { data } = await axios.get('/version/cfproxy')
+    cfProxy.value = { ...cfProxy.value, ...data.data }
+  } catch { /* older server build */ }
+}
+
+async function saveCfProxy() {
+  cfSaving.value = true
+  try {
+    await axios.post('/version/cfproxy', { mode: cfProxy.value.mode, customUrl: cfProxy.value.customUrl })
+    ElMessage.success('已保存')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '保存失败')
+  } finally { cfSaving.value = false }
+}
+
+async function testCfProxy(prefix) {
+  cfTestResult.value = null
+  try {
+    const { data } = await axios.post('/version/cfproxy/test', { prefix })
+    cfTestResult.value = data.data
+  } catch (e) {
+    cfTestResult.value = { ok: false, error: e.response?.data?.message || '请求失败' }
+  }
+}
+
 async function check() {
   checking.value = true
   try {
@@ -381,7 +441,7 @@ async function delCustom(row) {
   load()
 }
 
-onMounted(() => { load(); loadPkgs(); loadProxy() })
+onMounted(() => { load(); loadPkgs(); loadProxy(); loadCfProxy() })
 </script>
 
 <style scoped>

@@ -12,11 +12,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import blake3 from '../vendor/blake3-inline.cjs';
+import { cfFetch } from './cf-proxy.js';
 
 const CF_API = (process.env.CF_API_BASE || 'https://api.cloudflare.com') + '/client/v4';
 
 async function cf(headers, method, pathName, body, isForm = false) {
-  const res = await fetch(CF_API + pathName, {
+  const res = await cfFetch(CF_API + pathName, {
     method,
     headers: isForm ? headers : { ...headers, 'Content-Type': 'application/json' },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
@@ -86,7 +87,7 @@ async function uploadAssets(headers, accountId, workerName, workerDistDir, step)
       const buf = fs.readFileSync(path.join(workerDistDir, relPath));
       form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
     }
-    const up = await fetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+    const up = await cfFetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
       method: 'POST', headers: { ...headers, Authorization: `Bearer ${session.jwt}` }, body: form
     });
     const j = await up.json();

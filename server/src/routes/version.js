@@ -7,6 +7,7 @@ import { Readable } from 'node:stream';
 import zlib from 'node:zlib';
 import tar from 'tar-stream';
 import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh-proxy.js';
+import { getCfConfig, setCfConfig } from '../services/cf-proxy.js';
 
 const REPO = 'maillab/cloud-mail';
 const BRANCH = 'main';
@@ -103,6 +104,37 @@ export default async function (app) {
     try {
       const res = await fetch(target, { headers: GH_HEADERS(), signal: ctrl.signal });
       return { code: 200, data: { ok: res.ok, status: res.status } };
+    } catch (e) {
+      return { code: 200, data: { ok: false, status: 0, error: e.message } };
+    } finally { clearTimeout(timer); }
+  });
+
+  // ---- Cloudflare API acceleration proxy (v0.4.0) ----
+  app.get('/cfproxy', { preHandler: [app.auth] }, async () => {
+    return { code: 200, data: getCfConfig() };
+  });
+
+  app.post('/cfproxy', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    try {
+      setCfConfig(req.body || {});
+      return { code: 200, message: 'Cloudflare 加速配置已保存' };
+    } catch (e) {
+      return reply.code(400).send({ code: 400, message: e.message });
+    }
+  });
+
+  // probe a CF proxy prefix / direct line with a tiny API call (no config change)
+  app.post('/cfproxy/test', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const { prefix } = req.body || {};
+    const url = `https://api.cloudflare.com/client/v4/user/tokens/verify`;
+    const target = prefix ? prefix + url.replace(/^https?:\/\//, '') : url;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15000);
+    try {
+      const res = await fetch(target, { headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal });
+      const body = await res.text().catch(() => '');
+      // any HTTP response (even 400/401 from CF) means the LINE works
+      return { code: 200, data: { ok: true, status: res.status, cf: body.includes('"success"') } };
     } catch (e) {
       return { code: 200, data: { ok: false, status: 0, error: e.message } };
     } finally { clearTimeout(timer); }
