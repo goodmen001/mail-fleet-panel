@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import blake3 from '../vendor/blake3-inline.cjs';
 
-const CF_API = 'https://api.cloudflare.com/client/v4';
+const CF_API = (process.env.CF_API_BASE || 'https://api.cloudflare.com') + '/client/v4';
 
 async function cf(headers, method, pathName, body, isForm = false) {
   const res = await fetch(CF_API + pathName, {
@@ -245,12 +245,14 @@ export async function initDeployedSite(siteUrl, adminEmail, adminPassword, jwtSe
 // with identical bindings. D1/KV data is untouched; cloud-mail's schema init
 // and migrations are idempotent (CREATE TABLE IF NOT EXISTS + guarded ALTERs),
 // so users / emails / settings survive the upgrade. No /api/init call needed.
-export async function upgradeDeployedMail(headers, accountId, workerName, workerDistDir, onStep) {
+export async function upgradeDeployedMail(headers, accountId, workerName, workerDistDir, onStep, cachedSettings = null) {
   const step = (msg) => onStep?.(msg);
 
-  // 1. read current bindings (plain_text vars incl. jwt_secret are returned here)
+  // 1. read current bindings (plain_text vars incl. jwt_secret are returned here);
+  //    detection may have already fetched them — reuse to save a round trip
   step('读取现有 Worker 配置');
-  const settings = await cf(headers, 'GET', `/accounts/${accountId}/workers/scripts/${workerName}/settings`);
+  const settings = cachedSettings ||
+    await cf(headers, 'GET', `/accounts/${accountId}/workers/scripts/${workerName}/settings`);
   const bindings = (settings.bindings || []).filter(b =>
     b.type === 'd1' || b.type === 'kv_namespace' || b.type === 'r2_bucket' ||
     b.type === 'send_email' || b.type === 'ai' || b.type === 'assets' ||
@@ -286,11 +288,71 @@ export async function upgradeDeployedMail(headers, accountId, workerName, worker
   return { success: true, workerName };
 }
 
-// detect whether mail.<domain> is already served by a Worker on this account
-// (i.e. the domain has been deployed before) — used to auto-pick upgrade mode
-export async function findDeployedWorker(headers, accountId, domain) {
+// a Worker counts as a cloud-mail instance when it has both a D1 and a KV
+// binding (only cloud-mail sets up that pair); reading settings also gives us
+// jwt_secret etc. for the upgrade
+function isMailWorker(settings) {
+  const b = settings.bindings || [];
+  return b.some(x => x.type === 'd1') && b.some(x => x.type === 'kv_namespace');
+}
+
+// list every cloud-mail instance on the account: walk the account's Workers,
+// read each one's settings, keep those with the D1+KV mail signature.
+// Returns [{ workerName, settings }] — this is the reliable way to detect
+// previously deployed mailboxes (custom-domains list alone misses workers
+// attached via routes / workers.dev and misses accounts with several mail
+// sites under different domains).
+export async function listMailWorkers(headers, accountId) {
+  const scripts = await cf(headers, 'GET', `/accounts/${accountId}/workers/scripts`);
+  const out = [];
+  for (const s of (scripts || [])) {
+    const name = s.id || s.name;
+    if (!name) continue;
+    try {
+      const settings = await cf(headers, 'GET', `/accounts/${accountId}/workers/scripts/${name}/settings`);
+      if (isMailWorker(settings)) out.push({ workerName: name, settings });
+    } catch { /* script unreadable (subrequest limits etc.) — skip */ }
+  }
+  return out;
+}
+
+// custom domains attached to workers on this account (worker_services included)
+export async function listWorkerCustomDomains(headers, accountId) {
+  try { return await cf(headers, 'GET', `/accounts/${accountId}/workers/domains`) || []; }
+  catch { return []; }
+}
+
+// pick the mail worker that serves `domain` out of a pre-fetched worker list:
+// custom domain `mail.<domain>` → routes containing the domain → d1/kv binding
+// ids derived from the domain → (single worker) name containing the domain
+export function matchMailWorkerForDomain(mailWorkers, domain, customDomains = []) {
   const siteDomain = `mail.${domain}`;
-  const domains = await cf(headers, 'GET', `/accounts/${accountId}/workers/domains`);
-  const hit = (domains || []).find(d => d.hostname === siteDomain);
-  return hit ? { workerName: hit.service, siteDomain } : null;
+  const hit = customDomains.find(d => d.hostname === siteDomain);
+  if (hit) {
+    const w = mailWorkers.find(m => m.workerName === hit.service);
+    if (w) return w;
+  }
+  const zoneSuffix = '.' + domain;
+  const flatDomain = domain.toLowerCase().replace(/[.\-]/g, '');
+  for (const m of mailWorkers) {
+    const routes = m.settings.routes || [];
+    if (routes.some(r => (typeof r === 'string' ? r : r.pattern || '').includes(zoneSuffix))) return m;
+    const bindHit = (m.settings.bindings || []).some(b =>
+      (b.type === 'd1' || b.type === 'kv_namespace') && String(b.id || '').toLowerCase().replace(/[.\-]/g, '').includes(flatDomain));
+    if (bindHit) return m;
+  }
+  if (mailWorkers.length === 1) {
+    const m = mailWorkers[0];
+    if (m.workerName.toLowerCase().replace(/[.\-]/g, '').includes(flatDomain)) return m;
+  }
+  return null;
+}
+
+// detect whether `domain` is already served by one of the account's mail
+// workers — walks the Workers list, so it also catches route-attached workers
+export async function findDeployedWorker(headers, accountId, domain) {
+  const mailWorkers = await listMailWorkers(headers, accountId);
+  const customDomains = await listWorkerCustomDomains(headers, accountId);
+  const m = matchMailWorkerForDomain(mailWorkers, domain, customDomains);
+  return m ? { workerName: m.workerName, siteDomain: `mail.${domain}`, settings: m.settings } : null;
 }

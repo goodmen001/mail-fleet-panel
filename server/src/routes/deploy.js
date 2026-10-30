@@ -2,7 +2,7 @@ import db, { encrypt } from '../db/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker } from '../services/deploy-service.js';
+import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerForDomain } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
 // the built-in packages ship with the installation (exe: data/…-dist next to
@@ -47,7 +47,10 @@ function resolvePkgDir(pkgId) {
 export default async function (app) {
   const isAdminCheck = (req) => req.user.role === 'admin';
   // preflight: which of these domains already have a cloud-mail worker on the
-  // account (those will be UPGRADED in place instead of fresh-deployed)
+  // account (those will be UPGRADED in place instead of fresh-deployed).
+  // Detection walks the account's Workers and reads their settings (d1+kv
+  // signature = a cloud-mail site), so it also catches workers attached via
+  // routes rather than custom domains.
   app.post('/check', { preHandler: [app.auth] }, async (req, reply) => {
     const { credId, accountId, domains } = req.body || {};
     if (!credId || !Array.isArray(domains)) return reply.code(400).send({ code: 400, message: 'credId + domains[] 必填' });
@@ -56,15 +59,24 @@ export default async function (app) {
     if (!isAdminCheck(req) && credRow.owner_id !== req.user.uid) return reply.code(403).send({ code: 403, message: '凭证不属于你' });
     const accId = accountId || accountIdOf(credId);
     if (!accId) return reply.code(400).send({ code: 400, message: '凭证缺少 Account ID' });
-    const result = {};
+    // read all mail workers once for the whole batch (settings carry the
+    // original config we will reuse when upgrading)
     const headers = credentialHeaders(credId);
+    let mailWorkers = [];
+    let customDomains = [];
+    try {
+      mailWorkers = await listMailWorkers(headers, accId);
+      customDomains = await listWorkerCustomDomains(headers, accId);
+    } catch (e) {
+      return reply.code(502).send({ code: 502, message: '读取 Workers 列表失败: ' + e.message });
+    }
+    const result = {};
     for (const d of domains) {
-      try {
-        const hit = await findDeployedWorker(headers, accId, d);
-        result[d] = hit ? { deployed: true, workerName: hit.workerName, siteDomain: hit.siteDomain } : { deployed: false };
-      } catch (e) {
-        result[d] = { deployed: false, error: e.message };
-      }
+      const m = matchMailWorkerForDomain(mailWorkers, d, customDomains);
+      result[d] = m
+        ? { deployed: true, workerName: m.workerName, siteDomain: `mail.${d}`,
+            hasJwt: !!((m.settings.bindings || []).find(b => b.type === 'plain_text' && b.name === 'jwt_secret')?.text) }
+        : { deployed: false };
     }
     return { code: 200, data: result };
   });
@@ -141,8 +153,8 @@ export default async function (app) {
         // already deployed? → in-place upgrade: reuse the SAME worker + bindings
         const existing = await findDeployedWorker(j.headers, j.accountId, j.domain);
         if (existing) {
-          step(`检测到 ${existing.siteDomain} 已部署过（Worker: ${existing.workerName}），进入升级模式`);
-          const ur = await upgradeDeployedMail(j.headers, j.accountId, existing.workerName, j.pkgDir, step);
+          step(`检测到已部署的邮箱服务（Worker: ${existing.workerName}${existing.settings ? '，配置已读出' : ''}），进入升级模式：只更新邮局程序，原邮件/用户/配置数据不动`);
+          const ur = await upgradeDeployedMail(j.headers, j.accountId, existing.workerName, j.pkgDir, step, existing.settings);
           db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
             .run('success', JSON.stringify(steps), j.recordId);
           return;

@@ -63,9 +63,13 @@
               </el-select>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="100">
+          <el-table-column label="状态" width="150">
             <template #default="{row}">
-              <el-tag v-if="row.deployed" size="small" type="warning" effect="dark">已部署·升级</el-tag>
+              <el-tooltip v-if="row.deployed" :content="`已识别邮箱 Worker: ${row.workerName}${row.hasJwt === false ? '（无法读回 jwt_secret，升级将中止）' : '，原配置已读出，升级只更新程序'}`" placement="top">
+                <el-tag size="small" :type="row.hasJwt === false ? 'danger' : 'warning'" effect="dark">
+                  已部署·升级<template v-if="row.hasJwt === false">⚠</template>
+                </el-tag>
+              </el-tooltip>
               <el-tag v-else-if="row.checked" size="small" type="info" effect="plain">新部署</el-tag>
             </template>
           </el-table-column>
@@ -219,7 +223,10 @@ async function onCredChange(g) {
       const { data: cd } = await axios.post('/deploy/check', { credId: g.credId, domains: g.zones.map(z => z.name) })
       for (const row of g.rows) {
         row.checked = true
-        row.deployed = !!(cd.data?.[row.domain]?.deployed)
+        const info = cd.data?.[row.domain]
+        row.deployed = !!(info?.deployed)
+        row.workerName = info?.workerName || ''
+        row.hasJwt = info?.hasJwt
       }
     } catch { /* preflight is advisory only */ }
   } catch (e) {
