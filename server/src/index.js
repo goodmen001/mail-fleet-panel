@@ -82,7 +82,9 @@ startTray({
   tooltip: `Mail Fleet Panel (${url})`,
   onOpen: () => openBrowser(url),
   onQuit: async () => {
-    stopTray();
+    // v0.5.1: stopTray is now async and gracefully dismisses the tray icon
+    // ({"type":"exit"}), with a 3s hard-kill fallback for a stuck child.
+    try { await stopTray(); } catch { /* child already gone */ }
     try { await app.close(); } catch { /* force below regardless */ }
     process.exit(0);
   }
