@@ -10,3 +10,6 @@ pkg/
 server/data/
 data/panel.db
 data/panel_secret
+data/*.db-shm
+data/*.db-wal
+data/*.db

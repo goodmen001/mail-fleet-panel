@@ -9,7 +9,9 @@ import tar from 'tar-stream';
 import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh-proxy.js';
 import { getCfConfig, setCfConfig } from '../services/cf-proxy.js';
 import { fetch as undiciFetch } from 'undici';
-import { getOutProxyUrl, setOutProxyUrl, outProxyMode, testOutProxy, getDispatcher } from '../services/out-proxy.js';
+import { getOutProxyUrl, setOutProxyUrl, outProxyMode, testOutProxy, getDispatcher,
+  getOutProxyOwner, setOutProxyOwner, getOutProxyHistory, restoreOutProxy, deleteOutProxyHistory,
+  getConfiguredProxyUrl } from '../services/out-proxy.js';
 import { listZones, deployProxyWorker, getProxyStatus, PROXY_HOST_PREFIX } from '../services/onlycf-proxy.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
@@ -101,7 +103,9 @@ export default async function (app) {
   });
 
   // ---- GitHub acceleration proxy config (v28) ----
-  app.get('/proxy', { preHandler: [app.auth] }, async () => {
+  // v0.7.4: admin-only — the custom proxy URL is panel infrastructure info
+  // that normal users must not see
+  app.get('/proxy', { preHandler: [app.auth, app.requireAdmin] }, async () => {
     const cfg = getGhConfig();
     return { code: 200, data: { ...cfg, mirrors: KNOWN_MIRRORS } };
   });
@@ -130,8 +134,8 @@ export default async function (app) {
     } finally { clearTimeout(timer); }
   });
 
-  // ---- Cloudflare API acceleration proxy (v0.4.0) ----
-  app.get('/cfproxy', { preHandler: [app.auth] }, async () => {
+  // ---- Cloudflare API acceleration proxy (v0.4.0) — admin-only (v0.7.4) ----
+  app.get('/cfproxy', { preHandler: [app.auth, app.requireAdmin] }, async () => {
     return { code: 200, data: getCfConfig() };
   });
 
@@ -181,21 +185,67 @@ export default async function (app) {
   });
 
   // ---- outbound proxy (v0.6.0): socks5/http for api.cloudflare.com & github ----
-  app.get('/outproxy', { preHandler: [app.auth] }, async () => {
-    return { code: 200, data: { url: getOutProxyUrl(), mode: outProxyMode() } };
+  // v0.7.4 per-user isolation: the URL is only visible/manageable by the user
+  // who configured it (others get exists-only status; a test tells whether the
+  // line works without revealing the address)
+  app.get('/outproxy', { preHandler: [app.auth] }, async (req) => {
+    const url = getConfiguredProxyUrl();
+    const mine = url && getOutProxyOwner() === req.user.uid;
+    return {
+      code: 200,
+      data: {
+        url: mine ? url : '',
+        mode: outProxyMode(),
+        mine: !!mine,
+        exists: !!url,
+        // own history entries only — other users' are never exposed
+        history: getOutProxyHistory(req.user.uid)
+      }
+    };
   });
 
-  app.post('/outproxy', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+  app.post('/outproxy', { preHandler: [app.auth] }, async (req, reply) => {
     try {
-      setOutProxyUrl((req.body || {}).url);
+      const url = (req.body || {}).url;
+      if (url && url.trim() && getConfiguredProxyUrl() && getOutProxyOwner() !== req.user.uid) {
+        return reply.code(403).send({ code: 403, message: '已有其他用户配置了出站代理，无法覆盖' });
+      }
+      setOutProxyUrl(url);
+      setOutProxyOwner(url && url.trim() ? req.user.uid : null);
       return { code: 200, message: '出站代理已保存' };
     } catch (e) {
       return reply.code(400).send({ code: 400, message: e.message });
     }
   });
 
-  app.post('/outproxy/test', { preHandler: [app.auth, app.requireAdmin] }, async () => {
-    return { code: 200, data: await testOutProxy() };
+  // usable by anyone who needs to know whether the current line works — the
+  // result never contains the proxy address
+  app.post('/outproxy/test', { preHandler: [app.auth] }, async (req) => {
+    const r = await testOutProxy();
+    if (r.via && r.via !== 'direct') r.via = 'proxy';
+    return { code: 200, data: r };
+  });
+
+  // v0.7.4: history of proxies auto-removed on logout (own entries only)
+  app.get('/outproxy/history', { preHandler: [app.auth] }, async (req) => {
+    return { code: 200, data: getOutProxyHistory(req.user.uid) };
+  });
+
+  app.post('/outproxy/history/restore', { preHandler: [app.auth] }, async (req, reply) => {
+    try {
+      if (getConfiguredProxyUrl() && getOutProxyOwner() !== req.user.uid) {
+        return reply.code(403).send({ code: 403, message: '已有其他用户配置了出站代理，无法恢复' });
+      }
+      restoreOutProxy(req.user.uid, Number(req.body?.id));
+      return { code: 200, message: '已恢复该代理' };
+    } catch (e) {
+      return reply.code(400).send({ code: 400, message: e.message });
+    }
+  });
+
+  app.delete('/outproxy/history', { preHandler: [app.auth] }, async (req) => {
+    deleteOutProxyHistory(req.user.uid, Number(req.query.id));
+    return { code: 200, message: '已删除' };
   });
 
   // ---- one-click onlycf.<domain> API reverse-proxy (v0.6.0) ----

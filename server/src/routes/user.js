@@ -1,4 +1,5 @@
 import db, { hashPassword, verifyPassword } from '../db/index.js';
+import { clearOwnedProxy } from '../services/out-proxy.js';
 
 export default async function (app) {
   // list users (admin only)
@@ -44,5 +45,13 @@ export default async function (app) {
     if (Number(userId) === req.user.uid) return reply.code(400).send({ code: 400, message: '不能删除自己' });
     db.prepare('DELETE FROM panel_user WHERE user_id = ?').run(userId);
     return { code: 200, message: '已删除' };
+  });
+
+  // logout (v0.7.4): if the current outbound proxy was configured by this
+  // user, auto-remove it (proxy is optional — only needed on blocked lines)
+  // and record it in their history so the next login can restore it
+  app.post('/logout', { preHandler: [app.auth] }, async (req) => {
+    const removed = clearOwnedProxy(req.user.uid);
+    return { code: 200, message: removed ? '已退出，出站代理已自动取消' : '已退出' };
   });
 }

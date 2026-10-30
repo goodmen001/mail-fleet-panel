@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="tech-card" style="margin-top:20px">
+    <div class="tech-card" style="margin-top:20px" v-if="isAdmin">
       <div class="tech-title">
         <Icon icon="mdi:fast-forward-outline"/>GitHub 加速代理
         <el-button size="small" type="primary" style="margin-left:auto" @click="saveProxy" :loading="proxySaving">保存配置</el-button>
@@ -37,7 +37,7 @@
       </el-form>
     </div>
 
-    <div class="tech-card" style="margin-top:20px">
+    <div class="tech-card" style="margin-top:20px" v-if="isAdmin">
       <div class="tech-title">
         <Icon icon="mdi:cloud-braces"/>Cloudflare 加速代理
         <el-button size="small" type="primary" style="margin-left:auto" @click="saveCfProxy" :loading="cfSaving">保存配置</el-button>
@@ -64,10 +64,8 @@
         </el-form-item>
       </el-form>
 
-      <div class="sec-title" style="margin-top:8px">一键部署 API 反代（推荐）</div>
-      <el-alert type="success" show-icon :closable="false" style="margin-bottom:12px"
-        title="用面板里的 Cloudflare 凭证，把一个极小的 API 反代 Worker 部署到你自己的账号，并绑定 https://onlycf.你的域名（同时关闭 *.workers.dev 预览地址）。部署完成后自动填入上方代理地址。"/>
-      <el-form label-width="100px" style="max-width:640px">
+      <div class="sec-title" style="margin-top:8px" v-if="isAdmin">一键部署 API 反代（推荐）</div>
+      <el-form label-width="100px" style="max-width:640px" v-if="isAdmin">
         <el-form-item label="凭证">
           <el-select v-model="onlycf.credId" placeholder="选择 Cloudflare 凭证" style="width:280px" @change="loadZones">
             <el-option v-for="c in creds" :key="c.credId" :label="c.name" :value="c.credId"/>
@@ -86,8 +84,12 @@
 
       <div class="sec-title" style="margin-top:8px">出站代理（SOCKS5 / HTTP）</div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
-        title="面板服务器走 v2ray/clash 等本地代理或公司 HTTP 代理时填写，例如 socks5://127.0.0.1:1080 或 http://user:pass@host:port。对所有 Cloudflare / GitHub API 请求生效。"/>
-      <el-form label-width="100px" style="max-width:640px">
+        :title="isAdmin
+          ? '面板服务器走 v2ray/clash 等本地代理或公司 HTTP 代理时填写，例如 socks5://127.0.0.1:1080 或 http://user:pass@host:port。对所有 Cloudflare / GitHub API 请求生效。'
+          : '代理是可选的：只有在无法连接 Cloudflare 时才需要。配置后退出登录会自动取消该代理（可在历史代理中找回），避免影响其他用户。'"/>
+      <el-alert v-if="outProxy.exists && !outProxy.mine" type="warning" show-icon :closable="false" style="margin-bottom:12px"
+        title="当前已有其他用户配置了出站代理（地址保密）。线路不可用时请让该用户调整，或联系管理员。"/>
+      <el-form label-width="100px" style="max-width:640px" v-if="!outProxy.exists || outProxy.mine">
         <el-form-item label="代理地址">
           <el-input v-model="outProxy.url" placeholder="留空 = 不使用（直连）" style="max-width:420px"/>
         </el-form-item>
@@ -101,6 +103,15 @@
           <el-button size="small" type="primary" :loading="outProxy.saving" @click="saveOutProxy">保存出站代理</el-button>
         </el-form-item>
       </el-form>
+      <div v-if="outProxy.history.length" class="sec-title">历史代理</div>
+      <div class="mirror-list" style="max-width:640px">
+        <div v-for="h in outProxy.history" :key="h.id" class="mirror-item">
+          <span class="mirror-url">{{ h.url }}</span>
+          <el-tag size="small" type="info">{{ (h.removedAt || '').slice(0, 10) }}</el-tag>
+          <el-button size="small" link type="primary" @click="restoreProxy(h)">恢复使用</el-button>
+          <el-button size="small" link type="danger" @click="delProxyHistory(h)">删除</el-button>
+        </div>
+      </div>
     </div>
 
     <div class="tech-card" style="margin-top:20px">
@@ -487,13 +498,16 @@ async function deployOnlycf() {
   } finally { onlycf.value.deploying = false }
 }
 
-// ---- outbound proxy (socks5/http) ----
-const outProxy = ref({ url: '', saving: false, testing: false, result: null })
+// ---- outbound proxy (socks5/http) — v0.7.4 per-user isolation ----
+const outProxy = ref({ url: '', saving: false, testing: false, result: null, mine: false, exists: false, history: [] })
 
 async function loadOutProxy() {
   try {
     const { data } = await axios.get('/version/outproxy')
     outProxy.value.url = data.data?.url || ''
+    outProxy.value.mine = !!data.data?.mine
+    outProxy.value.exists = !!data.data?.exists
+    outProxy.value.history = data.data?.history || []
   } catch { /* older server build */ }
 }
 
@@ -502,6 +516,7 @@ async function saveOutProxy() {
   try {
     await axios.post('/version/outproxy', { url: outProxy.value.url })
     ElMessage.success('出站代理已保存')
+    loadOutProxy()
   } catch (e) {
     ElMessage.error(e.response?.data?.message || '保存失败')
   } finally { outProxy.value.saving = false }
@@ -516,6 +531,25 @@ async function testOutProxy() {
   } catch (e) {
     outProxy.value.result = { ok: false, error: e.response?.data?.message || '请求失败' }
   } finally { outProxy.value.testing = false }
+}
+
+async function restoreProxy(h) {
+  try {
+    await axios.post('/version/outproxy/history/restore', { id: h.id })
+    ElMessage.success('已恢复该代理')
+    loadOutProxy()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '恢复失败')
+  }
+}
+
+async function delProxyHistory(h) {
+  try {
+    await axios.delete('/version/outproxy/history', { params: { id: h.id } })
+    loadOutProxy()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '删除失败')
+  }
 }
 
 loadOnlycfCreds()

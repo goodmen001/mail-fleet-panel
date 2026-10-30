@@ -111,7 +111,10 @@ async function checkUpdate() {
   } catch { ElMessage.error('检查更新失败（网络原因），可稍后重试') }
 }
 
-function logout() {
+async function logout() {
+  // tell the server first: if the outbound proxy was configured by this user,
+  // it is auto-removed and recorded in their history (v0.7.4)
+  try { await axios.post('/user/logout') } catch { /* token expired etc. */ }
   localStorage.removeItem('panel_token')
   localStorage.removeItem('panel_user')
   router.push('/login')
