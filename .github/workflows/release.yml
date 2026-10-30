@@ -54,8 +54,8 @@ jobs:
           cp -r web/dist pkg/web/dist
           cp tools/win-README.txt pkg/README.txt
           cp tools/启动面板.vbs tools/停止面板.vbs tools/后台启动面板.vbs pkg/ 2>/dev/null || true
-          # sanity: bundle must not have the old UI, must have worker bundle
-          grep -q "复制密码" pkg/panel.cjs
+          # sanity: bundle must have patched paths (esbuild escapes non-ASCII to \uXXXX)
+          grep -q "worker-dist" pkg/panel.cjs
           test -f pkg/data/worker-dist/worker.js
           test -f pkg/data/worker-dist/index.html
           VERSION=$(date +%Y%m%d%H%M%S)-${GITHUB_SHA::7}
