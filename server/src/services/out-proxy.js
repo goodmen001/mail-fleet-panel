@@ -12,7 +12,7 @@
 // cf-proxy.js / gh-proxy.js pass getDispatcher() to fetch as `dispatcher`.
 // undefined = direct. Verified E2E: fetch→SOCKS5→TLS (self-signed https echo
 // server through a mock SOCKS5 hop) returns the body end-to-end.
-import { ProxyAgent, Agent } from 'undici';
+import { ProxyAgent, Agent, fetch as undiciFetch } from 'undici';
 import { SocksClient } from 'socks';
 import tls from 'node:tls';
 import db from '../db/index.js';
@@ -120,7 +120,7 @@ export async function testOutProxy(testUrl = 'https://api.cloudflare.com/client/
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const dispatcher = url ? getDispatcher() : undefined;
-    const res = await fetch(testUrl, { signal: ctrl.signal, dispatcher });
+    const res = await undiciFetch(testUrl, { signal: ctrl.signal, dispatcher });
     const ms = Date.now() - started;
     return { ok: res.ok, status: res.status, ms, via: url || 'direct' };
   } catch (e) {

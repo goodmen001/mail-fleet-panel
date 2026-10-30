@@ -9,6 +9,10 @@
 // Cloudflare does not publish public API mirrors, so there is no mirror list —
 // users who need a proxy run their own (e.g. a CF Worker reverse proxy).
 import db from '../db/index.js';
+import { fetch as undiciFetch } from 'undici';
+// dispatcher must pair with undici's own fetch — the Node built-in fetch is a
+// different undici copy and rejects foreign dispatchers with
+// "invalid onRequestStart method"
 import { getDispatcher } from './out-proxy.js';
 
 function getSetting(key) {
@@ -50,7 +54,7 @@ async function attempt(url, init, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal, dispatcher: getDispatcher() });
+    return await undiciFetch(url, { ...init, signal: ctrl.signal, dispatcher: getDispatcher() });
   } catch {
     return null;
   } finally {
@@ -61,7 +65,7 @@ async function attempt(url, init, timeoutMs) {
 // single entry point for every api.cloudflare.com call in the panel.
 // Only https://api.cloudflare.com URLs are routed; other hosts pass through.
 export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
-  if (!url.startsWith('https://api.cloudflare.com/')) return fetch(url, init);
+  if (!url.startsWith('https://api.cloudflare.com/')) return undiciFetch(url, init);
   const cfg = getCfConfig();
   const targets = [];
   if (cfg.mode === 'direct') targets.push(null);
