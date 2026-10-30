@@ -41,6 +41,16 @@ jobs:
             https://api.github.com/repos/maillab/cloud-mail/releases/latest | node -p "JSON.parse(require('fs').readFileSync(0)).tag_name")
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "official upstream tag: $TAG"
+          # keep server/package.json in sync so the Docker fallback /api/version/app
+          # reports the release version (root npm version doesn't propagate)
+          node -e "
+            const fs=require('fs');
+            for (const f of ['package.json','server/package.json']) {
+              const j=JSON.parse(fs.readFileSync(f,'utf8'));
+              j.version=process.env.APP_VERSION;
+              fs.writeFileSync(f, JSON.stringify(j,null,2)+'\n');
+            }
+          "
           curl -sSL -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" -o src.tar.gz \
             "https://api.github.com/repos/maillab/cloud-mail/tarball/$TAG"
           mkdir upstream && tar xzf src.tar.gz -C upstream --strip-components=1
@@ -94,6 +104,7 @@ jobs:
             --outfile=pkg/sea-entry.cjs --supported:import-meta=false \
             --inject:tools/dirname-shim.js \
             --define:process.env.PANEL_SEA='"1"' \
+            --define:process.env.APP_VERSION='"${APP_VERSION}"' \
             --define:import.meta.url='"file:///app/index.js"'
           python tools/patch-panel.py pkg/sea-entry.cjs
           # sanity: bundle must have patched paths (esbuild escapes non-ASCII to \uXXXX)

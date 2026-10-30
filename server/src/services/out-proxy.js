@@ -60,9 +60,22 @@ function parseSocksUrl(url) {
 }
 
 class SocksDispatcher extends Agent {
-  connect(opts, cb) {
+  constructor(opts = {}) {
+    // undici's Agent reads the `connect` OPTION in its constructor (defaulting
+    // to buildConnector) — overriding the connect() METHOD on a subclass is
+    // silently ignored and requests fall back to a direct connection (seen as
+    // "Connect Timeout Error (attempted addresses: …)" on blocked networks).
+    // So the socks dial must be handed to super() as the connect option.
+    super({ ...opts, connect: (o, cb) => this.socksConnect(o, cb) });
+  }
+
+  socksConnect(opts, cb) {
     let p;
     try { p = parseSocksUrl(cachedUrl); } catch (e) { return cb(e, null); }
+    // undici passes port as an empty string when the URL has no explicit one —
+    // the default buildConnector defaults it to 443/80, so mirror that here
+    // (Number('') is NaN and the socks dial would hang forever)
+    const port = Number(opts.port) || (opts.protocol === 'https:' ? 443 : 80);
     // unauthenticated → skip local lookup when the proxy can resolve (socks5h);
     // socks library needs a destination host:port — for socks5 with a polluted
     // resolver we still pass the hostname and let the proxy resolve it
@@ -74,7 +87,7 @@ class SocksDispatcher extends Agent {
       // proxy resolves it when lookup is remote; socks lib handles DNS locally
       // when given an IP. Resolving here would fail on polluted networks, so
       // always send the hostname.
-      destination: { host: opts.hostname, port: Number(opts.port) },
+      destination: { host: opts.hostname, port },
       timeout: 15000
     })
       .then((info) => {
@@ -122,7 +135,9 @@ export async function testOutProxy(testUrl = 'https://api.cloudflare.com/client/
     const dispatcher = url ? getDispatcher() : undefined;
     const res = await undiciFetch(testUrl, { signal: ctrl.signal, dispatcher });
     const ms = Date.now() - started;
-    return { ok: res.ok, status: res.status, ms, via: url || 'direct' };
+    // the probe URL has no token, so CF answers 404/401 with its own JSON —
+    // any HTTP response (even non-2xx) proves the proxy path works end-to-end
+    return { ok: res.status < 500, status: res.status, ms, via: url || 'direct' };
   } catch (e) {
     return { ok: false, error: e.cause?.message || e.message, via: url || 'direct' };
   } finally {

@@ -15,13 +15,21 @@ import { credentialHeaders, accountIdOf } from './credential.js';
 
 const REPO = 'maillab/cloud-mail';
 const BRANCH = 'main';
-// fallback when APP_VERSION env is absent (dev mode): package.json lives two levels
-// above the data dir in dev (server/data → server/../package.json) and next to the
-// exe's data dir in SEA builds (env APP_VERSION is set there anyway)
+// version source chain (first non-empty wins):
+//   1. env APP_VERSION — set by CI (Windows zip job, Docker build-arg since v0.6.4)
+//   2. <exe-adjacent>/package.json — SEA builds where APP_VERSION is unset
+//   3. root package.json two levels above the data dir — dev (repo) layout
+//   4. server/package.json — Docker image layout (always shipped at /app/server)
+// server/package.json's own "version" drifts from the release (npm version only
+// touches the root), so it only counts when it matches a vN.M.K semver shape AND
+// nothing else resolved — historically it read 1.0.0 and made the topbar lie.
 const APP_VERSION = (() => {
+  const env = process.env.APP_VERSION;
+  if (env) return env;
   const candidates = [
     process.env.PANEL_SEA ? path.join(path.dirname(process.execPath), 'package.json') : null,
-    path.join(dataDir, '..', '..', 'package.json')
+    path.join(dataDir, '..', '..', 'package.json'),
+    path.join(dataDir, '..', 'server', 'package.json')
   ].filter(Boolean);
   for (const p of candidates) {
     try { return JSON.parse(fs.readFileSync(p, 'utf8')).version || null; } catch { /* next */ }
