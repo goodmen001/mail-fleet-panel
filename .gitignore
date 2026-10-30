@@ -2,3 +2,6 @@ node_modules/
 dist/
 data/
 *.log
+!data/
+!data/worker-dist/
+!data/worker-dist/**

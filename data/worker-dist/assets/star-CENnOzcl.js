@@ -1,0 +1,1 @@
+import{ax as a}from"./index-_LqCdX9B.js";function e(t){return a.post("/star/add",{emailId:t})}function o(t){return a.delete("/star/cancel",{params:{emailId:t}})}function c(t,r,s){return a.get("/star/list",{params:{emailId:t,size:r,full:s}})}export{e as a,c as b,o as s};
