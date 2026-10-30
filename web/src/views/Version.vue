@@ -63,8 +63,11 @@
         </el-table-column>
         <el-table-column prop="note" label="备注" min-width="140"/>
         <el-table-column prop="createTime" label="时间" width="160"/>
-        <el-table-column label="操作" width="80" v-if="isAdmin">
-          <template #default="{row}"><el-button size="small" type="danger" link @click="delPkg(row)">删除</el-button></template>
+        <el-table-column label="操作" width="130" v-if="isAdmin">
+          <template #default="{row}">
+            <el-button size="small" type="primary" link :loading="updatingId === row.pkgId" @click="updatePkg(row)">在线更新</el-button>
+            <el-button size="small" type="danger" link @click="delPkg(row)">删除</el-button>
+          </template>
         </el-table-column>
       </el-table>
     </div>
@@ -228,6 +231,22 @@ async function delPkg(row) {
   await ElMessageBox.confirm(`删除部署包「${row.name}」？`, '提示', { type: 'warning' })
   await axios.delete('/version/pkgs/delete', { params: { pkgId: row.pkgId } })
   loadPkgs()
+}
+
+// per-package online update: official → rebuild from latest upstream release;
+// custom → pull newest custom-worker-dist from our GitHub release
+const updatingId = ref(null)
+async function updatePkg(row) {
+  const what = row.kind === 'official' ? '上游最新 Release 重新构建' : 'GitHub 最新定制包 zip'
+  await ElMessageBox.confirm(`在线更新「${row.name}」（${what}）？更新期间旧包仍可部署。`, '提示', { type: 'warning' })
+  updatingId.value = row.pkgId
+  try {
+    const { data } = await axios.post('/version/pkgs/update', { pkgId: row.pkgId })
+    ElMessage.success(data.message || '已更新')
+    loadPkgs()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '更新失败')
+  } finally { updatingId.value = null }
 }
 
 // ---- GitHub sync (custom packages built by CI) ----

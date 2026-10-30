@@ -5,15 +5,15 @@ import path from 'node:path';
 import { deployCloudMail, initDeployedSite } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
-// the built-in package ships with the installation (exe: data/worker-dist
-// next to the exe; docker/node: /app/data/worker-dist)
-function builtinWorkerDist() {
+// the built-in packages ship with the installation (exe: data/…-dist next to
+// the exe; docker/node: /app/data/…-dist)
+function builtinDist(sub) {
   const candidates = [
-    process.env.WORKER_DIST,
-    process.env.PANEL_SEA ? path.join(path.dirname(process.execPath), 'data', 'worker-dist') : null,
-    path.join(process.cwd(), 'data', 'worker-dist'),
+    process.env[sub === 'official-dist' ? 'OFFICIAL_DIST' : 'WORKER_DIST'],
+    process.env.PANEL_SEA ? path.join(path.dirname(process.execPath), 'data', sub) : null,
+    path.join(process.cwd(), 'data', sub),
     // dev mode: panel started from server/ while data lives at repo root
-    path.join(process.cwd(), '..', 'data', 'worker-dist')
+    path.join(process.cwd(), '..', 'data', sub)
   ].filter(Boolean);
   for (const dir of candidates) {
     if (fs.existsSync(path.join(dir, 'worker.js'))) return dir;
@@ -22,16 +22,23 @@ function builtinWorkerDist() {
 }
 
 // resolve the deploy dir for a job: explicit pkgId from the version center,
-// or the built-in worker-dist that ships with the panel
+// a built-in selector (-1 = 内置官方包), or the built-in custom worker-dist
 function resolvePkgDir(pkgId) {
+  if (pkgId === -1 || pkgId === '-1' || pkgId === 'builtin-official') {
+    const dir = builtinDist('official-dist');
+    if (!dir || !fs.existsSync(path.join(dir, 'worker.js'))) {
+      return { err: '内置官方包缺失：data/official-dist 需包含 worker.js（请更新安装包或从版本中心导入官方包）' };
+    }
+    return { dir, pkgName: '内置官方包' };
+  }
   if (pkgId) {
     const p = db.prepare('SELECT * FROM pkg_version WHERE pkg_id = ?').get(Number(pkgId));
     if (!p) return { err: `版本中心包 ${pkgId} 不存在` };
     if (!fs.existsSync(path.join(p.dir, 'worker.js'))) return { err: `包「${p.name}」数据缺失，请重新上传/导入` };
     return { dir: p.dir, pkgName: p.name, tag: p.tag };
   }
-  const dir = builtinWorkerDist();
-  if (!fs.existsSync(dir) || !fs.existsSync(path.join(dir, 'worker.js'))) {
+  const dir = builtinDist('worker-dist');
+  if (!dir || !fs.existsSync(path.join(dir, 'worker.js'))) {
     return { err: '部署包缺失：exe 旁的 data/worker-dist 目录需包含 worker.js 和静态资源（请重新解压完整安装包）' };
   }
   return { dir, pkgName: '内置定制包' };
@@ -59,7 +66,7 @@ export default async function (app) {
     // validate all packages up front so one bad pkg doesn't start half a batch
     const pkgDirs = new Map();
     for (const item of items) {
-      const key = item.pkgId || 0;
+      const key = item.pkgId === -1 || item.pkgId === '-1' ? 'builtin-official' : (item.pkgId || 0);
       if (!pkgDirs.has(key)) {
         const r = resolvePkgDir(item.pkgId);
         if (r.err) return reply.code(400).send({ code: 400, message: r.err });
@@ -95,7 +102,7 @@ export default async function (app) {
         const id = db.prepare('INSERT INTO deploy_record (domain, cred_id, status, steps, owner_id, pkg_id) VALUES (?,?,?,?,?,?)')
           .run(d.domain, item.credId, 'running', '[]', uid, item.pkgId || null).lastInsertRowid;
         records.push(id);
-        const pkg = pkgDirs.get(item.pkgId || 0);
+        const pkg = pkgDirs.get(item.pkgId === -1 || item.pkgId === '-1' ? 'builtin-official' : (item.pkgId || 0));
         jobs.push({ headers, accountId, domain: d.domain, adminEmail: d.adminEmail, credId: item.credId, recordId: id, pkgDir: pkg.dir, pkgName: pkg.pkgName, pkgTag: pkg.tag });
       }
     }

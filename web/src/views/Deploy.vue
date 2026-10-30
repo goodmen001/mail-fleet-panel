@@ -36,10 +36,11 @@
       <el-form-item label="部署包" label-width="80px" style="margin-bottom:14px">
         <el-select v-model="pkgId" placeholder="使用面板内置定制包" style="width:320px" clearable>
           <el-option label="内置定制包（随面板安装）" :value="0"/>
+          <el-option label="内置官方包（随面板安装，原版）" :value="-1"/>
           <el-option v-for="p in pkgs" :key="p.pkgId" :value="p.pkgId"
             :label="(p.kind === 'custom' ? '[定制] ' : '[官方] ') + p.name + (p.version ? ' v' + p.version : '')"/>
         </el-select>
-        <span class="tip-txt" style="margin-left:10px">在版本中心可上传定制包 / 导入官方包；留空使用内置定制包</span>
+        <span class="tip-txt" style="margin-left:10px">在版本中心可上传定制包 / 导入官方包；官方包在部署中心同样可选</span>
       </el-form-item>
 
       <div v-for="(g, gi) in groups" :key="gi" class="cred-group">
@@ -168,7 +169,7 @@ const maskDomain = (d) => {
 
 // per-account deployment groups
 const groups = ref([])
-// deployment package: 0/undefined = built-in custom package, else pkgId from version center
+// deployment package: 0/undefined = built-in custom, -1 = built-in official, else pkgId from version center
 const pkgId = ref(0)
 const pkgs = ref([])
 

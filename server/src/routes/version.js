@@ -18,6 +18,17 @@ async function gh(path) {
   return res.json();
 }
 
+// same but against the panel's own repo (custom packages built by CI)
+function ghSelf(path) {
+  const repo = process.env.PANEL_GITHUB_REPO || 'goodmen001/mail-fleet-panel';
+  return fetch(`https://api.github.com/repos/${repo}/${path}`, {
+    headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
+  }).then(r => {
+    if (!r.ok) throw new Error(`GitHub API ${path}: ${r.status}`);
+    return r.json();
+  });
+}
+
 // packages live under DATA_DIR/packages/<pkg_id> (also mirrors the Windows
 // package layout data/…). Kept out of the repo data dir shipped in the zip.
 function packagesRoot() {
@@ -251,6 +262,103 @@ export default async function (app) {
       return { code: 200, data: (releases || []).map(r => ({ tag: r.tag_name, name: r.name, prerelease: r.prerelease, publishedAt: r.published_at, body: (r.body || '').slice(0, 400) })) };
     } catch (e) {
       return reply.code(502).send({ code: 502, message: '获取官方 Release 失败: ' + e.message });
+    }
+  });
+
+  // ---- per-package online update ----
+  // official pkg → rebuild from the LATEST upstream release and swap in place;
+  // custom pkg  → re-pull the newest custom-worker-dist-*.zip asset from the
+  // panel's own GitHub release. The old deploy dir is kept until the new one
+  // validates, so a failed update never breaks deployments.
+  app.post('/pkgs/update', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const { pkgId } = req.body || {};
+    const row = db.prepare('SELECT * FROM pkg_version WHERE pkg_id = ?').get(Number(pkgId));
+    if (!row) return reply.code(404).send({ code: 404, message: '包不存在' });
+
+    // stage the new deploy dir next to the old one; swap only after validation
+    const stage = path.join(packagesRoot(), `update-${row.pkg_id}-${Date.now()}`);
+    fs.mkdirSync(stage, { recursive: true });
+    try {
+      let version = null, tag = null, srcNote = '';
+      if (row.kind === 'official') {
+        // latest official release of the upstream repo
+        const rel = await gh('releases/latest');
+        tag = rel.tag_name;
+        version = tag.replace(/^v/, '');
+        srcNote = `上游 ${tag}`;
+        const res = await fetch(`https://api.github.com/repos/${REPO}/tarball/${encodeURIComponent(tag)}`, {
+          headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
+        });
+        if (!res.ok) throw new Error(`下载源码失败: HTTP ${res.status}`);
+        const work = path.join(stage, '_build');
+        const extract = tar.extract();
+        const extractDone = new Promise((resolve, reject) => {
+          extract.on('finish', resolve); extract.on('error', reject);
+          extract.on('entry', (hdr, stream, next) => {
+            const rel2 = hdr.name.split('/').slice(1).join('/');
+            if (!rel2 || hdr.type === 'directory') { stream.resume(); return next(); }
+            const out = path.join(work, rel2);
+            fs.mkdirSync(path.dirname(out), { recursive: true });
+            stream.pipe(fs.createWriteStream(out)).on('finish', next).on('error', next);
+          });
+        });
+        await pipeline(Readable.fromWeb(res.body), zlib.createGunzip(), extract);
+        await extractDone;
+        const src = work;
+        const hasLock = fs.existsSync(path.join(src, 'mail-vue', 'package-lock.json'));
+        await run(`cd ${JSON.stringify(src + '/mail-vue')} && ${hasLock ? 'npm ci' : 'npm install'} --no-audit --no-fund --legacy-peer-deps && npm run build`, '前端构建失败');
+        if (!fs.existsSync(path.join(src, 'mail-worker', 'dist', 'index.html')) && fs.existsSync(path.join(src, 'mail-vue', 'dist', 'index.html'))) {
+          fs.mkdirSync(path.join(src, 'mail-worker', 'dist'), { recursive: true });
+          fs.cpSync(path.join(src, 'mail-vue', 'dist'), path.join(src, 'mail-worker', 'dist'), { recursive: true });
+        }
+        if (!fs.existsSync(path.join(src, 'mail-worker', 'dist', 'index.html'))) throw new Error('前端构建产物缺少 index.html');
+        const wkHasLock = fs.existsSync(path.join(src, 'mail-worker', 'package-lock.json'));
+        await run(`cd ${JSON.stringify(src + '/mail-worker')} && ${wkHasLock ? 'npm ci' : 'npm install'} --no-audit --no-fund --legacy-peer-deps`, 'Worker 依赖安装失败');
+        await run(`cd ${JSON.stringify(src + '/mail-worker')} && npx --yes wrangler@4 deploy --dry-run --outdir ${JSON.stringify(path.join(stage, 'bundle'))}`, 'Worker 打包失败');
+        if (!fs.existsSync(path.join(stage, 'bundle', 'index.js'))) throw new Error('Worker 打包产物缺少 index.js');
+        fs.copyFileSync(path.join(stage, 'bundle', 'index.js'), path.join(stage, 'worker.js'));
+        fs.cpSync(path.join(src, 'mail-worker', 'dist'), stage, { recursive: true });
+        fs.rmSync(work, { recursive: true, force: true });
+      } else {
+        // custom: newest custom-worker-dist-*.zip from the panel's own releases
+        const rels = await ghSelf('releases?per_page=30');
+        let asset = null;
+        for (const r of rels || []) {
+          const a = (r.assets || []).filter(a => /^custom-worker-dist-\d+\.\d+\.\d+\.zip$/.test(a.name))
+            .sort((x, y) => y.name.localeCompare(x.name))[0];
+          if (a) { asset = a; break; }
+        }
+        if (!asset) throw new Error('GitHub Release 上未找到 custom-worker-dist-*.zip，无法在线更新');
+        version = (asset.name.match(/(\d+\.\d+\.\d+)/) || [])[1] || null;
+        srcNote = `GitHub ${asset.name}`;
+        const res = await fetch(asset.url, {
+          headers: { 'User-Agent': 'mail-fleet-panel', Accept: 'application/octet-stream', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
+        });
+        if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        const { extractZip } = await import('./zip-extract.mjs');
+        await extractZip(buf, stage);
+        if (!fs.existsSync(path.join(stage, 'worker.js'))) {
+          // nested zip-root layout: hoist the dir containing worker.js
+          const sub = fs.readdirSync(stage, { withFileTypes: true }).filter(e => e.isDirectory())
+            .map(e => path.join(stage, e.name)).find(d => fs.existsSync(path.join(d, 'worker.js')));
+          if (!sub) throw new Error('包内未找到 worker.js');
+          for (const f of fs.readdirSync(sub)) fs.cpSync(path.join(sub, f), path.join(stage, f), { recursive: true });
+        }
+      }
+      const err = validatePkgDir(stage);
+      if (err) throw new Error(err);
+      // validated: swap dirs
+      const oldDir = row.dir;
+      db.prepare('UPDATE pkg_version SET version=?, tag=?, dir=?, note=?, create_time=datetime(\'now\') WHERE pkg_id=?')
+        .run(version, tag, stage, (row.note ? row.note + '；' : '') + `在线更新 ${srcNote} ${new Date().toISOString().slice(0, 10)}`, row.pkg_id);
+      if (oldDir && oldDir.startsWith(packagesRoot()) && oldDir !== stage) {
+        fs.rmSync(oldDir, { recursive: true, force: true });
+      }
+      return { code: 200, message: `「${row.name}」已更新到 ${version || '最新'}（${srcNote}）` };
+    } catch (e) {
+      fs.rmSync(stage, { recursive: true, force: true });
+      return reply.code(400).send({ code: 400, message: '更新失败: ' + e.message });
     }
   });
 

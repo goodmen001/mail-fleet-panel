@@ -113,6 +113,8 @@ jobs:
           # inject the SEA blob into the exe (postject, same fuse as official SEA docs)
           npx -y postject@1.0.0-alpha.6 pkg/mail-fleet-panel.exe NODE_SEA_BLOB sea-prep.blob \
             --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 --overwrite
+          # GUI subsystem: no console window on double-click
+          python tools/patch-pe-gui.py pkg/mail-fleet-panel.exe --inplace
           # deploy packages shipped beside the exe
           mkdir -p pkg/data/worker-dist pkg/data/official-dist
           cp data/worker-dist/worker.js pkg/data/worker-dist/
@@ -123,7 +125,8 @@ jobs:
           else
             echo "WARN: official dist missing, zip continues without it"
           fi
-          # web dist + README
+          # web dist + README (sea-entry.cjs is an intermediate — blob embeds it)
+          rm -f pkg/sea-entry.cjs sea-prep.blob
           mkdir -p pkg/web
           cp -r web/dist pkg/web/dist
           cp tools/win-README.txt pkg/README.txt

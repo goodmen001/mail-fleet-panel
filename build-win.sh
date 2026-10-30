@@ -45,9 +45,13 @@ N22=/tmp/sea/node-v22.20.0-linux-x64/bin/node
 cp /tmp/sea/node-v22.20.0-win-x64/node.exe /tmp/sea/winpkg/mail-fleet-panel.exe
 node /tmp/postject/node_modules/postject/dist/cli.js /tmp/sea/winpkg/mail-fleet-panel.exe NODE_SEA_BLOB sea-prep.blob \
   --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 --overwrite
+# GUI subsystem: no console window on double-click (logs stay in the void;
+# check data/ or the browser UI instead)
+python3 tools/patch-pe-gui.py /tmp/sea/winpkg/mail-fleet-panel.exe --inplace
 rm -f /tmp/sea/winpkg/panel.cjs /tmp/sea/winpkg/启动面板.vbs /tmp/sea/winpkg/停止面板.vbs /tmp/sea/winpkg/后台启动面板.vbs
 
 echo "[5/5] syncing web dist + zipping..."
+rm -f /tmp/sea/winpkg/sea-entry.cjs /tmp/sea/winpkg/sea-prep.blob
 rm -rf /tmp/sea/winpkg/web/dist
 cp -r web/dist /tmp/sea/winpkg/web/dist
 cp tools/win-README.txt /tmp/sea/winpkg/README.txt
