@@ -50,7 +50,9 @@ jobs:
             mkdir -p upstream/mail-worker/dist
             cp -r upstream/mail-vue/dist/. upstream/mail-worker/dist/
           fi
-          # worker bundle (same wrangler dry-run as the panel's import-official)
+          # worker bundle (same wrangler dry-run as the panel's import-official);
+          # wrangler.toml has a custom build that shells out to pnpm
+          npm install -g pnpm
           (cd upstream/mail-worker && npm install --no-audit --no-fund --legacy-peer-deps)
           (cd upstream/mail-worker && npx --yes wrangler@4 deploy --dry-run --outdir bundle)
           test -f upstream/mail-worker/bundle/index.js
