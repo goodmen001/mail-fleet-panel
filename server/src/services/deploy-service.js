@@ -323,17 +323,19 @@ export async function listWorkerCustomDomains(headers, accountId) {
   catch { return []; }
 }
 
-// pick the mail worker that serves `domain` out of a pre-fetched worker list:
-// custom domain `mail.<domain>` → routes containing the domain → d1/kv binding
-// ids derived from the domain → (single worker) name containing the domain
+// pick the mail worker that serves `domain` out of a pre-fetched worker list.
+// NOTE: this sync version only matches by custom domain `mail.<domain>` and
+// worker-name heuristics — the RELIABLE detection is matchMailWorkerDeep()
+// below, which also consults Email Routing rules / zone routes / D1 names.
 export function matchMailWorkerForDomain(mailWorkers, domain, customDomains = []) {
   const siteDomain = `mail.${domain}`;
-  const hit = customDomains.find(d => d.hostname === siteDomain);
+  const zoneSuffix = '.' + domain;
+  // hostname is mail.<domain>, the apex itself, or any sub-domain of it
+  const hit = customDomains.find(d => d.hostname === siteDomain || d.hostname === domain || d.hostname.endsWith(zoneSuffix));
   if (hit) {
     const w = mailWorkers.find(m => m.workerName === hit.service);
     if (w) return w;
   }
-  const zoneSuffix = '.' + domain;
   const flatDomain = domain.toLowerCase().replace(/[.\-]/g, '');
   for (const m of mailWorkers) {
     const routes = m.settings.routes || [];
@@ -349,11 +351,71 @@ export function matchMailWorkerForDomain(mailWorkers, domain, customDomains = []
   return null;
 }
 
+// DEEP detection: on top of the sync heuristics above, ask Cloudflare for the
+// authoritative signals. This catches mail sites deployed by older panel
+// versions (site not on mail.<domain>) or manually via wrangler:
+//   1. zone Workers routes (GET /zones/:id/workers/routes)
+//   2. Email Routing rules (catch-all pointing at the worker — the strongest
+//      signal: whoever receives @<domain> mail IS the mail site)
+//   3. D1 database instance names (panel deploys name them
+//      cloud-mail-<domain-flat>-xxx; bindings only carry UUIDs, so we map
+//      name → uuid → worker binding)
+// Every extra lookup is best-effort: a failing endpoint is skipped, and any
+// hard failure still falls back to the sync heuristics.
+export async function matchMailWorkerDeep(mailWorkers, customDomains, headers, accountId, domain) {
+  const sync = matchMailWorkerForDomain(mailWorkers, domain, customDomains);
+  if (sync) return sync;
+  const zoneSuffix = '.' + domain;
+  const flatDomain = domain.toLowerCase().replace(/[.\-]/g, '');
+  const byName = (name) => mailWorkers.find(m => m.workerName === name);
+
+  // 1+2. zone-level lookups (need the zone id first)
+  try {
+    const zones = await cf(headers, 'GET', `/zones?name=${domain}`);
+    const zoneId = zones?.[0]?.id;
+    if (zoneId) {
+      // workers routes on this zone
+      try {
+        const routes = await cf(headers, 'GET', `/zones/${zoneId}/workers/routes`);
+        for (const r of (routes || [])) {
+          if (String(r.pattern || '').includes(zoneSuffix) || String(r.pattern || '') === domain) {
+            const w = byName(r.script) || byName(r.script_name);
+            if (w) return w;
+          }
+        }
+      } catch { /* routes not readable — skip */ }
+      // email routing rules: catch-all + explicit rules
+      try {
+        const rules = await cf(headers, 'GET', `/zones/${zoneId}/email/routing/rules`);
+        for (const r of (rules || [])) {
+          for (const a of (r.actions || [])) {
+            const names = a.value ? (Array.isArray(a.value) ? a.value : [a.value]) : [];
+            for (const n of names) { const w = byName(n); if (w) return w; }
+          }
+        }
+      } catch { /* email routing not readable — skip */ }
+    }
+  } catch { /* zone lookup failed — skip to D1 matching */ }
+
+  // 3. D1 database instance name contains the domain → its uuid is bound to the worker
+  try {
+    const dbs = await cf(headers, 'GET', `/accounts/${accountId}/d1/database`);
+    const hit = (dbs || []).find(d => String(d.name || '').toLowerCase().replace(/[.\-]/g, '').includes(flatDomain));
+    if (hit?.uuid) {
+      const w = mailWorkers.find(m => (m.settings.bindings || []).some(b => b.type === 'd1' && b.id === hit.uuid));
+      if (w) return w;
+    }
+  } catch { /* d1 list failed — skip */ }
+
+  return null;
+}
+
 // detect whether `domain` is already served by one of the account's mail
-// workers — walks the Workers list, so it also catches route-attached workers
+// workers — deep match (custom domains + zone routes + email routing rules +
+// D1 names), so it also catches older deployments not on mail.<domain>
 export async function findDeployedWorker(headers, accountId, domain) {
   const mailWorkers = await listMailWorkers(headers, accountId);
   const customDomains = await listWorkerCustomDomains(headers, accountId);
-  const m = matchMailWorkerForDomain(mailWorkers, domain, customDomains);
+  const m = await matchMailWorkerDeep(mailWorkers, customDomains, headers, accountId, domain);
   return m ? { workerName: m.workerName, siteDomain: `mail.${domain}`, settings: m.settings } : null;
 }

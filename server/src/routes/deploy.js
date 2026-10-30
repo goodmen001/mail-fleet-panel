@@ -2,7 +2,7 @@ import db, { encrypt } from '../db/index.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerForDomain } from '../services/deploy-service.js';
+import { deployCloudMail, initDeployedSite, upgradeDeployedMail, findDeployedWorker, listMailWorkers, listWorkerCustomDomains, matchMailWorkerDeep } from '../services/deploy-service.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
 // the built-in packages ship with the installation (exe: data/…-dist next to
@@ -72,7 +72,8 @@ export default async function (app) {
     }
     const result = {};
     for (const d of domains) {
-      const m = matchMailWorkerForDomain(mailWorkers, d, customDomains);
+      // deep match: custom domains + zone routes + email routing rules + D1 names
+      const m = await matchMailWorkerDeep(mailWorkers, customDomains, headers, accId, d);
       if (!m) { result[d] = { deployed: false }; continue; }
       // surface the existing deployment's config so the user can visually
       // confirm it is the right site before upgrading. jwt_secret is NEVER
