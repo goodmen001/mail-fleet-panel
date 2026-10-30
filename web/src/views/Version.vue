@@ -82,7 +82,14 @@
         </el-form-item>
       </el-form>
 
-      <div class="sec-title" style="margin-top:8px">出站代理（SOCKS5 / HTTP）</div>
+    </div>
+
+    <!-- v0.7.5: moved out of the admin-only CF card above — every logged-in
+         user needs the outbound proxy when their line can't reach CF/GitHub.
+         Isolation is enforced server-side (owner-only visibility, 403 on
+         overwrite, auto-remove on logout with restore history). -->
+    <div class="tech-card" style="margin-top:20px">
+      <div class="sec-title" style="margin-top:0">出站代理（SOCKS5 / HTTP）</div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
         :title="isAdmin
           ? '面板服务器走 v2ray/clash 等本地代理或公司 HTTP 代理时填写，例如 socks5://127.0.0.1:1080 或 http://user:pass@host:port。对所有 Cloudflare / GitHub API 请求生效。'

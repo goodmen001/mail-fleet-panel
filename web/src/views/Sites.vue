@@ -3,7 +3,9 @@
     <div class="tech-card">
       <div class="tech-title"><Icon icon="mdi:server-network"/>已接入站点</div>
       <div style="margin-bottom:14px">
-        <el-button type="primary" @click="addShow = true" v-if="isAdmin">接入站点</el-button>
+        <!-- v0.7.5: open to all users — backend already assigns owner_id and
+             lists/isolates per user; normal users manage their own sites -->
+        <el-button type="primary" @click="addShow = true">接入站点</el-button>
         <el-button @click="checkAll">全部体检</el-button>
         <!-- privacy toggle: hide/show every account email on this page -->
         <el-button :type="reveal ? 'warning' : 'default'" @click="reveal = !reveal" style="float:right">
