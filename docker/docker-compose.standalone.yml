@@ -1,0 +1,22 @@
+# Mail Fleet Panel — standalone docker-compose (pull prebuilt image)
+# 用法：
+#   mkdir data && docker compose up -d
+#   打开 http://localhost:3300  默认 admin / admin123（登录后立即改密）
+#
+# 数据持久化：站点/凭证/配置/部署包全部存宿主机 ./data，升级镜像
+#   docker compose pull && docker compose up -d
+# 数据不会丢。panel_secret（凭证加密密钥）也在 ./data 里自动生成保存。
+#
+# 注意：PANEL_SECRET 设置后请不要更换 —— 换了已保存的凭证将无法解密。
+# 不设置也可以：面板首次启动会在 data/panel_secret 自动生成并固定。
+services:
+  mail-fleet-panel:
+    image: xuexinas/mail-fleet-panel:latest   # 或 ghcr.io/goodmen001/mail-fleet-panel:latest
+    container_name: mail-fleet-panel
+    ports:
+      - "3300:3300"
+    environment:
+      - PANEL_SECRET=${PANEL_SECRET:-}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

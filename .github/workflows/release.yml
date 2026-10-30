@@ -228,6 +228,10 @@ jobs:
             ```
             启动：`docker compose up -d`，访问 http://localhost:3300
 
+            **升级镜像（数据不丢）**：`docker compose pull && docker compose up -d`。
+            站点/凭证/配置全部存宿主机 `./data`；`PANEL_SECRET` 设置后勿更换（换了已存凭证无法解密）；
+            不设置也可，面板首次启动会在 `data/panel_secret` 自动生成并固定。
+
             ### 版本中心部署包
             - `custom-worker-dist-*.zip`：定制部署包（可在版本中心「从 GitHub 同步」一键导入）
             - `official-worker-dist-*.zip`：官方部署包（同步官方最新 Release 构建，同一升级地址）

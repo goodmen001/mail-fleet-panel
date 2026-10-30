@@ -5,7 +5,7 @@ import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import db, { hashPassword } from './db/index.js';
+import db, { hashPassword, panelSecret } from './db/index.js';
 import { startTray, stopTray, openBrowser } from './services/tray-service.js';
 
 import authRoutes from './routes/auth.js';
@@ -25,7 +25,7 @@ process.on('uncaughtException', e => console.error('[uncaughtException]', e));
 
 async function main() {
 await app.register(cors, { origin: true });
-await app.register(jwt, { secret: process.env.PANEL_SECRET || 'change-me-in-production' });
+await app.register(jwt, { secret: panelSecret });
 // multipart for version-center package uploads
 await app.register(multipart);
 

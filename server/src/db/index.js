@@ -11,7 +11,25 @@ const db = new DatabaseSync(path.join(DATA_DIR, 'panel.db'));
 db.exec('PRAGMA journal_mode = WAL');
 
 // ---- crypto for Cloudflare credentials ----
-const SECRET = process.env.PANEL_SECRET || 'change-me-in-production';
+// PANEL_SECRET: env first; otherwise auto-generated ONCE and persisted to
+// <data>/panel_secret — so credential encryption and JWT signing stay stable
+// across container upgrades even when the user never set the env var or kept
+// the compose placeholder (a changing secret made all stored credentials
+// undecryptable and logged everyone out, which looked like "data lost").
+const SECRET = (() => {
+  const env = process.env.PANEL_SECRET;
+  // known compose/docs placeholders don't count as a real secret — they were
+  // shipped verbatim in the release notes, so many users run with them as-is
+  const PLACEHOLDERS = ['change-me-in-production', 'please-change-me-to-a-long-random-string', 'please-change-this-secret'];
+  if (env && !PLACEHOLDERS.includes(env)) {
+    return env;
+  }
+  const f = path.join(DATA_DIR, 'panel_secret');
+  try { return fs.readFileSync(f, 'utf8').trim(); } catch { /* first boot */ }
+  const gen = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(f, gen, { mode: 0o600 });
+  return gen;
+})();
 
 export function encrypt(plain) {
   const key = crypto.createHash('sha256').update(SECRET).digest();
@@ -99,6 +117,7 @@ try { db.exec('ALTER TABLE deploy_record ADD COLUMN pkg_id INTEGER'); } catch { 
 // seed version state
 db.prepare(`INSERT OR IGNORE INTO version_state (id) VALUES (1)`).run();
 
+export const panelSecret = SECRET;
 export default db;
 // v24: deployment package registry (version center) + per-user data isolation
 db.exec(`

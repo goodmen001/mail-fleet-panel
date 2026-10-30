@@ -20,7 +20,28 @@ cd docker
 PANEL_SECRET=$(openssl rand -hex 32) docker compose up -d --build
 ```
 
+或直接拉取预构建镜像（免本地构建）：
+
+```bash
+mkdir -p data && curl -LO https://raw.githubusercontent.com/goodmen001/mail-fleet-panel/master/docker/docker-compose.standalone.yml
+docker compose -f docker-compose.standalone.yml up -d
+```
+
 访问 `http://localhost:3300`，默认账号 `admin / admin123`，**登录后立即改密**。
+
+#### 数据持久化与升级
+
+站点、凭证、用户、配置、部署包全部存在宿主机 `./data`（容器内 `/app/data`）。
+凭证加密密钥保存在 `./data/panel_secret`（首次启动自动生成）。
+
+升级镜像版本（数据不丢）：
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+⚠️ `PANEL_SECRET` 一旦设置就不要更换：更换后已保存的凭证将无法解密（面板会报错），
+必须重新录入凭证。不设置该变量也可，面板会自动生成并固定。
 
 ### 本地开发
 
