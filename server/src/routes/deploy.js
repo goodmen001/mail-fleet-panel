@@ -230,7 +230,14 @@ export default async function (app) {
               step(`站点网址核对无误：${actualUrl}`);
             }
           }
-          if (!siteRows.length) step(`站点管理中未找到该站点的记录，未做网址修正（实际地址：${actualUrl}）`);
+          if (!siteRows.length) {
+            // 旧版本部署的站点在站点管理里可能没有记录——自动补一条，
+            // 管理员密码未知（置空，用站内已有账号登录）
+            db.prepare(`INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache, owner_id)
+              VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?)`)
+              .run(j.domain, actualUrl, j.adminEmail, '', j.credId, j.domain, existing.workerName, 'online', null, req.user.uid);
+            step(`已自动补入站点管理（地址 ${actualUrl}；管理员密码未知置空，请用站内已有账号登录）`);
+          }
           db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
             .run('success', JSON.stringify(steps), j.recordId);
           return;
@@ -239,15 +246,27 @@ export default async function (app) {
         if (r.siteUrl) {
           // initial admin password for the new site
           const adminPassword = crypto.randomBytes(9).toString('base64url');
+          // 先落库站点管理：初始化/注册哪怕失败，站点记录也不能丢（此前
+          // 整段包在 try 里，init 一失败站点就不出现在站点管理，表现为
+          // 「部署成功但没有自动接入」）。已有同域名记录则更新。
+          const existing = db.prepare('SELECT site_id FROM site WHERE domain = ? OR base_url = ?').get(j.domain, r.siteUrl);
+          const siteValues = [j.domain, r.siteUrl, j.adminEmail, encrypt(adminPassword), j.credId, j.domain, r.workerName, 'online', r.token || null, req.user.uid];
+          if (existing) {
+            db.prepare(`UPDATE site SET name=?, base_url=?, admin_email=?, admin_password_enc=?, cred_id=?, domain=?, worker_name=?, status='online', last_check=datetime('now'), jwt_cache=?, owner_id=? WHERE site_id=?`)
+              .run(...siteValues, existing.site_id);
+          } else {
+            db.prepare(`INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache, owner_id)
+              VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?)`)
+              .run(...siteValues);
+          }
           try {
             await initDeployedSite(r.siteUrl, j.adminEmail, adminPassword, r.jwtSecret, step);
             step(`站点已自动接入站点管理；管理员 ${j.adminEmail} 初始密码: ${adminPassword}（请尽快登录修改）`);
-            db.prepare(`INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache, owner_id)
-              VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?)`)
-              .run(j.domain, r.siteUrl, j.adminEmail, encrypt(adminPassword), j.credId, j.domain, r.workerName, 'online', r.token || null, req.user.uid);
           } catch (e) {
-            step('自动注册/接入失败（站点本身已部署成功）: ' + e.message);
+            step(`站点已写入站点管理，但自动初始化/注册管理员失败: ${e.message}。可稍后在站点管理重试或手动初始化（管理员初始密码: ${adminPassword}）`);
           }
+        } else {
+          step('未取得站点地址（zone 缺失或绑定失败），未写入站点管理；请检查域名后重新部署');
         }
         db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
           .run('success', JSON.stringify(steps), j.recordId);
