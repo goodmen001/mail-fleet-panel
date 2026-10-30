@@ -179,6 +179,8 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          build-args: |
+            APP_VERSION=${{ env.APP_VERSION }}
           tags: |
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}

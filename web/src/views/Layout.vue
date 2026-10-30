@@ -23,6 +23,9 @@
       <header class="topbar">
         <span class="page-title">{{ $route.meta.title }}</span>
         <span class="me">
+          <el-tooltip content="面板版本" placement="bottom">
+            <span class="ver-chip" @click="checkUpdate">v{{ appVersion }}<template v-if="newVersion"> · <b class="new-tag">有新版 {{ newVersion }}</b></template></span>
+          </el-tooltip>
           {{ user?.username }} <el-tag size="small" effect="dark">{{ user?.role === 'admin' ? '管理员' : '用户' }}</el-tag>
           <el-button size="small" link @click="pwdShow = true"><Icon icon="mdi:lock-reset" width="15"/>改密</el-button>
         </span>
@@ -76,12 +79,36 @@ const menus = [
 
 // version comes from the server (package.json at build time); plain axios to avoid cycles
 const appVersion = ref('…')
+const newVersion = ref('')
+function cmpVer(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map(Number)
+  const pb = String(b).replace(/^v/, '').split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    const d = (pb[i] || 0) - (pa[i] || 0)
+    if (d) return d
+  }
+  return 0
+}
 onMounted(async () => {
   try {
     const { data } = await axios.get('/api/version/app')
     appVersion.value = data.data?.version || '?'
   } catch { appVersion.value = '?' }
 })
+// click the version chip → check latest GitHub release; shows 有新版 when newer
+async function checkUpdate() {
+  if (newVersion.value) return
+  try {
+    const { data } = await axios.get('/api/version/latest')
+    const latest = data.data?.tag
+    if (latest && appVersion.value !== '?' && cmpVer(appVersion.value, latest) > 0) {
+      newVersion.value = latest.replace(/^v/, '')
+      ElMessage.success(`发现新版本 v${newVersion.value}，请更新镜像/重新下载`)
+    } else {
+      ElMessage.success('已是最新版本')
+    }
+  } catch { ElMessage.error('检查更新失败（网络原因），可稍后重试') }
+}
 
 function logout() {
   localStorage.removeItem('panel_token')
@@ -124,6 +151,13 @@ nav { flex: 1; margin-top: 12px; display: flex; flex-direction: column; gap: 4px
 }
 .foot:hover { color: #f87171; }
 .ver { color: #4b5563; font-size: 11px; text-align: center; padding-bottom: 6px; font-family: monospace; }
+.ver-chip {
+  cursor: pointer; font-family: monospace; font-size: 12px;
+  color: #9ca3af; border: 1px solid var(--panel-border); border-radius: 10px;
+  padding: 2px 10px; margin-right: 6px; user-select: none;
+}
+.ver-chip:hover { color: var(--panel-accent); border-color: rgba(34,211,238,.35); }
+.new-tag { color: #fbbf24; }
 .main { flex: 1; display: flex; flex-direction: column; }
 .topbar {
   height: 56px; display: flex; align-items: center; justify-content: space-between;

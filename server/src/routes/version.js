@@ -81,6 +81,15 @@ async function extractZipTo(buf, dest) {
 export default async function (app) {
   // panel's own version (package.json at build time) — shown in the sidebar
   app.get('/app', async () => ({ code: 200, data: { version: process.env.APP_VERSION || APP_VERSION } }));
+  // latest panel release from GitHub (topbar 更新检查); non-fatal on network failure
+  app.get('/latest', async () => {
+    try {
+      const rel = await ghSelf('releases/latest');
+      return { code: 200, data: { tag: rel.tag_name, name: rel.name } };
+    } catch (e) {
+      return { code: 200, data: {}, message: `检查更新失败: ${e.message}` };
+    }
+  });
 
   // ---- GitHub acceleration proxy config (v28) ----
   app.get('/proxy', { preHandler: [app.auth] }, async () => {

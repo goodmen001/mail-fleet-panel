@@ -14,7 +14,8 @@ COPY server/ ./server/
 COPY --from=build /app/web/dist ./web/dist
 # worker deploy bundle (same layout as the Windows package: data/worker-dist)
 COPY data/worker-dist ./data/worker-dist
-ENV NODE_ENV=production PORT=3300 DATA_DIR=/app/data
+ARG APP_VERSION=dev
+ENV NODE_ENV=production PORT=3300 DATA_DIR=/app/data APP_VERSION=${APP_VERSION}
 VOLUME /app/data
 EXPOSE 3300
 CMD ["node", "server/src/index.js"]
