@@ -7,3 +7,4 @@ data/
 !data/worker-dist/**
 sea-prep.blob
 pkg/
+server/data/

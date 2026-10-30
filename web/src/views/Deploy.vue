@@ -65,7 +65,7 @@
           </el-table-column>
           <el-table-column label="状态" width="150">
             <template #default="{row}">
-              <el-tooltip v-if="row.deployed" :content="`已识别邮箱 Worker: ${row.workerName}${row.hasJwt === false ? '（无法读回 jwt_secret，升级将中止）' : '，原配置已读出，升级只更新程序'}`" placement="top">
+              <el-tooltip v-if="row.deployed" :content="`已识别邮箱 Worker: ${row.workerName}，点下方「已部署站点现有配置」查看详情`" placement="top">
                 <el-tag size="small" :type="row.hasJwt === false ? 'danger' : 'warning'" effect="dark">
                   已部署·升级<template v-if="row.hasJwt === false">⚠</template>
                 </el-tag>
@@ -85,6 +85,44 @@
           </el-table-column>
         </el-table>
         <el-button size="small" style="margin-top:6px" @click="g.rows.push({ domain: '', adminEmail: defaultEmail(g) })">+ 添加域名</el-button>
+
+        <!-- 已部署站点的现有配置详情（升级前可视化确认） -->
+        <div v-if="g.rows.some(r => r.deployed)" class="detail-panel">
+          <div class="detail-head" @click="g.showDetail = !g.showDetail">
+            <Icon :icon="g.showDetail ? 'mdi:chevron-down' : 'mdi:chevron-right'"/>
+            <span>已部署站点现有配置（升级前请核对）</span>
+            <span class="tip-txt" style="margin-left:8px">{{ g.rows.filter(r => r.deployed).length }} 个域名已是邮箱站点</span>
+          </div>
+          <div v-show="g.showDetail" class="detail-body">
+            <div v-for="r in g.rows.filter(x => x.deployed)" :key="r.domain" class="detail-item">
+              <div class="detail-domain">
+                <Icon icon="mdi:email-check-outline" style="color:#34d399"/>
+                <span class="secret" v-if="!reveal">{{ maskDomain(r.domain) }}</span><span v-else>{{ r.domain }}</span>
+                <el-tag v-if="r.hasJwt === false" size="small" type="danger" effect="plain" style="margin-left:8px">jwt_secret 不可读，升级将中止</el-tag>
+              </div>
+              <table class="detail-table">
+                <tr><td>Worker 名称</td><td>{{ r.workerName || '—' }}</td></tr>
+                <tr><td>站点地址</td><td>https://{{ r.mailDomain || ('mail.' + r.domain) }}</td></tr>
+                <tr><td>邮箱域名（发收件）</td><td><span class="secret" v-if="!reveal">{{ (r.domains || []).map(maskDomain).join('、') }}</span><span v-else>{{ (r.domains || []).join('、') || '—' }}</span></td></tr>
+                <tr><td>管理员账号</td><td><span class="secret" v-if="!reveal">{{ maskEmail(r.admin) }}</span><span v-else>{{ r.admin || '—' }}</span></td></tr>
+                <tr><td>自定义域名绑定</td><td><span class="secret" v-if="!reveal">{{ (r.workerDomains || []).map(maskDomain).join('、') }}</span><span v-else>{{ (r.workerDomains || []).join('、') || '—' }}</span></td></tr>
+                <tr><td>D1 数据库 ID</td><td><span class="secret" v-if="!reveal">{{ maskId(r.dbId) }}</span><span v-else>{{ r.dbId || '—' }}</span></td></tr>
+                <tr><td>KV 命名空间 ID</td><td><span class="secret" v-if="!reveal">{{ maskId(r.kvId) }}</span><span v-else>{{ r.kvId || '—' }}</span></td></tr>
+                <tr><td>R2 存储桶</td><td>{{ r.r2Bucket || '未配置' }}</td></tr>
+                <tr>
+                  <td>其它绑定</td>
+                  <td>
+                    <el-tag v-if="r.hasSendEmail" size="small" type="success" effect="plain" style="margin-right:6px">send_email 邮件发送</el-tag>
+                    <el-tag v-if="r.hasAi" size="small" type="success" effect="plain" style="margin-right:6px">AI</el-tag>
+                    <el-tag v-if="r.observability" size="small" type="info" effect="plain" style="margin-right:6px">可观测性</el-tag>
+                    <span v-if="r.compatDate" class="tip-txt">兼容日期 {{ r.compatDate }}</span>
+                  </td>
+                </tr>
+              </table>
+              <div class="tip-ok" style="margin-top:6px">升级只替换邮局程序；D1/KV 数据、邮件、用户、配置全部保留，jwt_secret 延用原值（登录态不失效）。</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div style="margin-top:12px">
@@ -179,6 +217,7 @@ const maskDomain = (d) => {
   const parts = d.split('.')
   return parts.length > 1 ? parts[0].slice(0, 1) + '•••.' + parts.slice(1).join('.') : d
 }
+const maskEmail = (e) => e ? e.slice(0, 2) + '•••@' + (e.split('@')[1] ? maskDomain(e.split('@')[1]) : '•••') : '—'
 
 // per-account deployment groups
 const groups = ref([])
@@ -194,7 +233,7 @@ async function loadPkgs() {
 }
 
 function newGroup() {
-  return { credId: null, zones: [], rows: [{ domain: '', adminEmail: '' }], loadingZones: false, zoneError: '' }
+  return { credId: null, zones: [], rows: [{ domain: '', adminEmail: '' }], loadingZones: false, zoneError: '', showDetail: true }
 }
 // prefill rows: one per zone; admin email defaults to admin@first-domain for the first row, admin@<own domain> for the rest
 function prefillRows(g) {
@@ -227,6 +266,19 @@ async function onCredChange(g) {
         row.deployed = !!(info?.deployed)
         row.workerName = info?.workerName || ''
         row.hasJwt = info?.hasJwt
+        // carry the full existing-config summary for the detail panel
+        row.admin = info?.admin || ''
+        row.domains = info?.domains || []
+        row.mailDomain = info?.mailDomain || ''
+        row.dbId = info?.dbId || ''
+        row.kvId = info?.kvId || ''
+        row.r2Bucket = info?.r2Bucket || ''
+        row.hasSendEmail = !!info?.hasSendEmail
+        row.hasAi = !!info?.hasAi
+        row.compatDate = info?.compatDate || ''
+        row.observability = !!info?.observability
+        row.workerDomains = info?.workerDomains || []
+        if (info?.deployed) g.showDetail = true
       }
     } catch { /* preflight is advisory only */ }
   } catch (e) {
@@ -309,6 +361,15 @@ onMounted(() => { load(); loadPkgs(); addGroup() })
 .tip-txt { color: #94a3b8; font-size: 12px; }
 .tip-ok { color: #34d399; font-size: 12px; }
 .tip-err { color: #f87171; font-size: 12px; }
+.detail-panel { margin-top: 10px; border: 1px dashed var(--panel-border); border-radius: 8px; padding: 10px 14px; background: rgba(59,130,246,.05); }
+.detail-head { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--panel-accent); cursor: pointer; user-select: none; }
+.detail-body { margin-top: 8px; }
+.detail-item { padding: 10px 0; border-bottom: 1px dashed var(--panel-border); }
+.detail-item:last-child { border-bottom: none; }
+.detail-domain { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.detail-table { font-size: 12px; border-collapse: collapse; }
+.detail-table td { padding: 3px 10px 3px 0; vertical-align: top; }
+.detail-table td:first-child { color: #94a3b8; white-space: nowrap; width: 150px; }
 .step-log { max-height: 300px; overflow: auto; font-size: 12px; font-family: monospace; }
 .secret { letter-spacing: 1px; color: #9aa4b2; user-select: none; }
 </style>

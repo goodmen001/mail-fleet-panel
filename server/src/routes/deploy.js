@@ -73,10 +73,34 @@ export default async function (app) {
     const result = {};
     for (const d of domains) {
       const m = matchMailWorkerForDomain(mailWorkers, d, customDomains);
-      result[d] = m
-        ? { deployed: true, workerName: m.workerName, siteDomain: `mail.${d}`,
-            hasJwt: !!((m.settings.bindings || []).find(b => b.type === 'plain_text' && b.name === 'jwt_secret')?.text) }
-        : { deployed: false };
+      if (!m) { result[d] = { deployed: false }; continue; }
+      // surface the existing deployment's config so the user can visually
+      // confirm it is the right site before upgrading. jwt_secret is NEVER
+      // returned — only a boolean readability flag.
+      const b = m.settings.bindings || [];
+      const plain = {};
+      for (const x of b) if (x.type === 'plain_text') plain[x.name] = x.text;
+      let domainsVar = null;
+      try { domainsVar = JSON.parse(plain.domain || 'null'); } catch { /* keep raw null */ }
+      result[d] = {
+        deployed: true,
+        workerName: m.workerName,
+        siteDomain: `mail.${d}`,
+        hasJwt: !!b.find(x => x.type === 'plain_text' && x.name === 'jwt_secret')?.text,
+        // readable config summary
+        admin: plain.admin || '',
+        domains: Array.isArray(domainsVar) ? domainsVar : (plain.domain ? [plain.domain] : []),
+        mailDomain: `mail.${d}`,
+        dbId: b.find(x => x.type === 'd1')?.id || '',
+        kvId: b.find(x => x.type === 'kv_namespace')?.namespace_id || b.find(x => x.type === 'kv_namespace')?.id || '',
+        r2Bucket: b.find(x => x.type === 'r2_bucket')?.bucket_name || '',
+        hasSendEmail: b.some(x => x.type === 'send_email'),
+        hasAi: b.some(x => x.type === 'ai'),
+        compatDate: m.settings.compatibility_date || '',
+        observability: !!(m.settings.observability?.enabled),
+        // custom domains attached to THIS worker
+        workerDomains: customDomains.filter(x => x.service === m.workerName).map(x => x.hostname)
+      };
     }
     return { code: 200, data: result };
   });
