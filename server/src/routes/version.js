@@ -8,7 +8,8 @@ import zlib from 'node:zlib';
 import tar from 'tar-stream';
 import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh-proxy.js';
 import { getCfConfig, setCfConfig } from '../services/cf-proxy.js';
-import { getOutProxyUrl, setOutProxyUrl, outProxyMode, testOutProxy } from '../services/out-proxy.js';
+import { fetch as undiciFetch } from 'undici';
+import { getOutProxyUrl, setOutProxyUrl, outProxyMode, testOutProxy, getDispatcher } from '../services/out-proxy.js';
 import { listZones, deployProxyWorker, getProxyStatus, PROXY_HOST_PREFIX } from '../services/onlycf-proxy.js';
 import { credentialHeaders, accountIdOf } from './credential.js';
 
@@ -146,7 +147,14 @@ export default async function (app) {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 15000);
     try {
-      const res = await fetch(target, { headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal });
+      // route through the outbound proxy too (v0.6.5): on networks where
+      // api.cloudflare.com:443 is blocked, a direct test always times out with
+      // "Connect Timeout Error (attempted addresses: 104.19.x.x:443 ...)"
+      const res = await undiciFetch(target, {
+        headers: { 'Content-Type': 'application/json' },
+        signal: ctrl.signal,
+        dispatcher: getDispatcher()
+      });
       const body = await res.text().catch(() => '');
       let cf = null;
       try { cf = JSON.parse(body); } catch { /* not JSON → bad proxy */ }
