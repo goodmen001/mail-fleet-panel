@@ -36,6 +36,7 @@
       <div class="tech-title">
         <Icon icon="mdi:package-variant-closed"/>部署包（版本中心）
         <el-button v-if="isAdmin" size="small" type="primary" style="margin-left:auto" @click="uploadShow = true">上传定制包</el-button>
+        <el-button v-if="isAdmin" size="small" type="success" style="margin-left:8px" @click="openGithubSync">从 GitHub 同步</el-button>
         <el-button v-if="isAdmin" size="small" style="margin-left:8px" @click="openImportOfficial">导入官方包</el-button>
       </div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
@@ -97,6 +98,30 @@
       <template #footer>
         <el-button @click="uploadShow = false">取消</el-button>
         <el-button type="primary" :loading="uploading" @click="doUpload">上传并校验</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="ghSyncShow" title="从 GitHub 同步定制包" width="560">
+      <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
+        title="列出本仓库 GitHub Release 中的 custom-worker-dist-*.zip（CI 自动构建并附加），选择一个即可拉取为定制包，无需本地构建。"/>
+      <el-table :data="ghReleases" size="small" v-loading="ghLoading" max-height="320">
+        <el-table-column prop="tag" label="Release" width="140"/>
+        <el-table-column label="构建时间" width="170">
+          <template #default="{row}">{{ (row.publishedAt || '').replace('T', ' ').slice(0, 16) }}</template>
+        </el-table-column>
+        <el-table-column label="定制包" min-width="220">
+          <template #default="{row}">
+            <div v-for="p in row.packages" :key="p.name" style="display:flex;align-items:center;gap:8px">
+              <span style="font-family:monospace;font-size:12px">{{ p.name }}</span>
+              <el-button size="small" type="primary" link @click="doGhSync(p, row)">同步</el-button>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!ghLoading && !ghReleases.length" description="暂无可同步的包 — 等下一次 push 触发 CI 后再试"/>
+      <template #footer>
+        <el-button @click="ghSyncShow = false">关闭</el-button>
+        <el-button @click="openGithubSync">刷新</el-button>
       </template>
     </el-dialog>
 
@@ -202,6 +227,33 @@ async function delPkg(row) {
   await ElMessageBox.confirm(`删除部署包「${row.name}」？`, '提示', { type: 'warning' })
   await axios.delete('/version/pkgs/delete', { params: { pkgId: row.pkgId } })
   loadPkgs()
+}
+
+// ---- GitHub sync (custom packages built by CI) ----
+const ghSyncShow = ref(false)
+const ghReleases = ref([])
+const ghLoading = ref(false)
+
+async function openGithubSync() {
+  ghSyncShow.value = true
+  ghLoading.value = true
+  try {
+    const { data } = await axios.get('/version/pkgs/github-releases')
+    ghReleases.value = data.data
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '获取 GitHub Release 失败')
+  } finally { ghLoading.value = false }
+}
+
+async function doGhSync(pkg, rel) {
+  try {
+    await axios.post('/version/pkgs/sync-github', { downloadUrl: pkg.downloadUrl, name: pkg.name, note: `GitHub ${rel.tag}` })
+    ElMessage.success(`已同步 ${pkg.name}`)
+    ghSyncShow.value = false
+    loadPkgs()
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '同步失败')
+  }
 }
 
 const short = s => s ? s.slice(0, 7) : ''

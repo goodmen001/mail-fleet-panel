@@ -253,6 +253,77 @@ export default async function (app) {
       return reply.code(502).send({ code: 502, message: '获取官方 Release 失败: ' + e.message });
     }
   });
+
+  // ---- sync deploy packages from our own GitHub repo releases ----
+  // The CI (see .github/workflows/release.yml) attaches custom-worker-dist-*.zip
+  // to each build release; here we list them and pull one into the version
+  // center as a custom package. Official packages: pull the SAME asset pattern
+  // from upstream maillab/cloud-mail is not available (they ship no worker
+  // bundle), so official sync = import-official (source build) — kept as is.
+  const SELF_REPO = process.env.PANEL_GITHUB_REPO || 'goodmen001/mail-fleet-panel';
+
+  app.get('/pkgs/github-releases', { preHandler: [app.auth] }, async (req, reply) => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, {
+        headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
+      });
+      if (!res.ok) throw new Error(`GitHub API ${res.status}`);
+      const releases = await res.json();
+      return {
+        code: 200,
+        data: (releases || []).map(r => ({
+          tag: r.tag_name,
+          name: r.name,
+          publishedAt: r.published_at,
+          packages: (r.assets || []).filter(a => /^custom-worker-dist-.*\.zip$/.test(a.name))
+            .map(a => ({ name: a.name, size: a.size, downloadUrl: a.browser_download_url }))
+        })).filter(r => r.packages.length > 0)
+      };
+    } catch (e) {
+      return reply.code(502).send({ code: 502, message: '获取 GitHub Release 失败: ' + e.message });
+    }
+  });
+
+  // pull a custom-worker-dist-*.zip asset from our GitHub release into the
+  // version center as a custom package (no build needed — CI built it)
+  app.post('/pkgs/sync-github', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const { downloadUrl, name, note } = req.body || {};
+    if (!downloadUrl || !downloadUrl.startsWith(`https://api.github.com/repos/${SELF_REPO}/releases/assets/`)) {
+      return reply.code(400).send({ code: 400, message: 'downloadUrl 必须是本仓库 Release 的资源地址' });
+    }
+    try {
+      const res = await fetch(downloadUrl, {
+        headers: {
+          'User-Agent': 'mail-fleet-panel',
+          Accept: 'application/octet-stream',
+          ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {})
+        }
+      });
+      if (!res.ok) throw new Error(`下载失败: HTTP ${res.status}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      const version = ((name || '').match(/custom-worker-dist-(\d+)-([0-9a-f]{7})\.zip/) || [])[1] || null;
+
+      const info = db.prepare('INSERT INTO pkg_version (name, kind, version, tag, dir, note) VALUES (?,?,?,?,?,?)')
+        .run(name || 'GitHub 定制包', 'custom', version, null, '', note || `同步自 GitHub ${SELF_REPO}`);
+      const pkgId = info.lastInsertRowid;
+      const dest = path.join(packagesRoot(), String(pkgId));
+      fs.mkdirSync(dest, { recursive: true });
+      try {
+        const dir = await extractZipTo(buf, dest);
+        if (!dir) throw new Error('包内未找到 worker.js');
+        const err = validatePkgDir(dir);
+        if (err) throw new Error(err);
+        db.prepare('UPDATE pkg_version SET dir=? WHERE pkg_id=?').run(dir, pkgId);
+        return { code: 200, data: { pkgId }, message: `已从 GitHub 同步 ${name}` };
+      } catch (e) {
+        fs.rmSync(dest, { recursive: true, force: true });
+        db.prepare('DELETE FROM pkg_version WHERE pkg_id=?').run(pkgId);
+        return reply.code(400).send({ code: 400, message: '同步失败: ' + e.message });
+      }
+    } catch (e) {
+      return reply.code(502).send({ code: 502, message: '同步失败: ' + e.message });
+    }
+  });
 }
 
 function run(cmd, label) {

@@ -1,0 +1,115 @@
+name: release
+
+# Build + publish on every push to master:
+#  - Windows portable zip (exe = official node runtime + bundled panel.cjs) → GitHub Release
+#  - Docker image → ghcr.io/goodmen001/mail-fleet-panel:{latest,sha,version}
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write      # create releases
+  packages: write      # push to GHCR
+
+jobs:
+  release:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            job: docker
+          - os: windows-latest
+            job: windows
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------- Windows portable zip ----------------
+      - name: Build Windows zip
+        if: matrix.job == 'windows'
+        shell: bash
+        run: |
+          NODE_VERSION=22.20.0
+          # web dist
+          (cd web && npm install --no-audit --no-fund && npm run build)
+          # bundle server with esbuild (same flags as build-win.sh)
+          (cd server && npm install --no-audit --no-fund)
+          npx -y esbuild@0.24.0 server/src/index.js --bundle --platform=node --format=cjs \
+            --outfile=pkg/panel.cjs --supported:import-meta=false \
+            --inject:tools/dirname-shim.js \
+            --define:process.env.PANEL_SEA='"1"' \
+            --define:import.meta.url='"file:///app/index.js"'
+          python tools/patch-panel.py pkg/panel.cjs
+          # worker deploy bundle (committed data/worker-dist)
+          mkdir -p pkg/data/worker-dist
+          cp data/worker-dist/worker.js pkg/data/worker-dist/
+          cp -r data/worker-dist/. pkg/data/worker-dist/
+          # node runtime as the exe (vbs launches: mail-fleet-panel.exe panel.cjs)
+          curl -sSLo node.zip https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-win-x64.zip
+          unzip -q node.zip
+          cp node-v${NODE_VERSION}-win-x64/node.exe pkg/mail-fleet-panel.exe
+          # web dist + README + launchers
+          mkdir -p pkg/web
+          cp -r web/dist pkg/web/dist
+          cp tools/win-README.txt pkg/README.txt
+          cp tools/启动面板.vbs tools/停止面板.vbs tools/后台启动面板.vbs pkg/ 2>/dev/null || true
+          # sanity: bundle must not have the old UI, must have worker bundle
+          grep -q "复制密码" pkg/panel.cjs
+          test -f pkg/data/worker-dist/worker.js
+          test -f pkg/data/worker-dist/index.html
+          VERSION=$(date +%Y%m%d%H%M%S)-${GITHUB_SHA::7}
+          # windows runner has no zip CLI; use 7z (preinstalled)
+          (cd pkg && 7z a -tzip ../mail-fleet-panel-win-${VERSION}.zip .)
+          # also package the worker-dist as a custom deploy package for the version center
+          (cd data/worker-dist && 7z a -tzip ../../custom-worker-dist-${VERSION}.zip .)
+          echo "ZIP=mail-fleet-panel-win-${VERSION}.zip" >> $GITHUB_ENV
+
+      - name: Upload Windows zip artifact
+        if: matrix.job == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-zip
+          path: |
+            ${{ env.ZIP }}
+            custom-worker-dist-${{ env.VERSION }}.zip
+
+      # ---------------- Docker image → GHCR ----------------
+      - name: Log in to GHCR
+        if: matrix.job == 'docker'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: matrix.job == 'docker'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+
+  publish:
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: win-zip
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: 构建 ${{ github.run_number }} (${{ github.sha }})
+          body: |
+            自动构建（commit ${{ github.sha }}）
+            - mail-fleet-panel-win-*.zip：Windows 便携版（解压后双击「启动面板.vbs」）
+            - Docker: docker pull ghcr.io/${{ github.repository }}:latest
+          files: |
+            mail-fleet-panel-win-*.zip
+            custom-worker-dist-*.zip
