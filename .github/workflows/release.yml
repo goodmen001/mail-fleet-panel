@@ -64,6 +64,7 @@ jobs:
           # also package the worker-dist as a custom deploy package for the version center
           (cd data/worker-dist && 7z a -tzip ../../custom-worker-dist-${VERSION}.zip .)
           echo "ZIP=mail-fleet-panel-win-${VERSION}.zip" >> $GITHUB_ENV
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
       - name: Upload Windows zip artifact
         if: matrix.job == 'windows'
