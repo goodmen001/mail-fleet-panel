@@ -36,7 +36,6 @@ def patch(path, inplace=False):
     if sub != 3:
         raise SystemExit(f'unexpected subsystem {sub}')
     if inplace:
-        shutil.copy2(path, path + '.console.bak')
         out = path
     else:
         out = sys.stdout.name if sys.stdout.isatty() is False and len(sys.argv) > 2 else sys.argv[2]

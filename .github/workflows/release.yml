@@ -115,6 +115,7 @@ jobs:
             --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 --overwrite
           # GUI subsystem: no console window on double-click
           python tools/patch-pe-gui.py pkg/mail-fleet-panel.exe --inplace
+          rm -f pkg/mail-fleet-panel.exe.console.bak
           # deploy packages shipped beside the exe
           mkdir -p pkg/data/worker-dist pkg/data/official-dist
           cp data/worker-dist/worker.js pkg/data/worker-dist/
