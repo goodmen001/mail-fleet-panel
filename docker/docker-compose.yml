@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        APP_VERSION: ${APP_VERSION:-0.7.0}
     container_name: mail-fleet-panel
     restart: unless-stopped
     ports:

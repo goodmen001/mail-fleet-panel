@@ -102,7 +102,15 @@
               </div>
               <table class="detail-table">
                 <tr><td>Worker 名称</td><td>{{ r.workerName || '—' }}</td></tr>
-                <tr><td>站点地址</td><td>https://{{ r.mailDomain || ('mail.' + r.domain) }}</td></tr>
+                <tr>
+                  <td>站点地址</td>
+                  <td>
+                    <span class="secret" v-if="!reveal">{{ maskDomain(r.siteDomain || ('mail.' + r.domain)) }}</span><span v-else>https://{{ r.siteDomain || ('mail.' + r.domain) }}</span>
+                    <el-tag v-if="r.siteUrlFixed" size="small" type="warning" effect="plain" style="margin-left:8px">
+                      站点网址已核对修正（仅改网址，数据未动）
+                    </el-tag>
+                  </td>
+                </tr>
                 <tr><td>邮箱域名（发收件）</td><td><span class="secret" v-if="!reveal">{{ (r.domains || []).map(maskDomain).join('、') }}</span><span v-else>{{ (r.domains || []).join('、') || '—' }}</span></td></tr>
                 <tr><td>管理员账号</td><td><span class="secret" v-if="!reveal">{{ maskEmail(r.admin) }}</span><span v-else>{{ r.admin || '—' }}</span></td></tr>
                 <tr><td>自定义域名绑定</td><td><span class="secret" v-if="!reveal">{{ (r.workerDomains || []).map(maskDomain).join('、') }}</span><span v-else>{{ (r.workerDomains || []).join('、') || '—' }}</span></td></tr>
@@ -276,6 +284,8 @@ async function onCredChange(g) {
         row.hasSendEmail = !!info?.hasSendEmail
         row.hasAi = !!info?.hasAi
         row.compatDate = info?.compatDate || ''
+        row.siteDomain = info?.siteDomain || ''
+        row.siteUrlFixed = info?.siteUrlFixed || null
         row.observability = !!info?.observability
         row.workerDomains = info?.workerDomains || []
         if (info?.deployed) g.showDetail = true

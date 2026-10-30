@@ -90,15 +90,26 @@ export default async function (app) {
       for (const x of b) if (x.type === 'plain_text') plain[x.name] = x.text;
       let domainsVar = null;
       try { domainsVar = JSON.parse(plain.domain || 'null'); } catch { /* keep raw null */ }
+      // the site's ACTUAL access URL: prefer mail.<domain>, then the apex,
+      // then any other sub-domain bound to this worker — deployments made with
+      // an older panel / wrong root-domain input may live elsewhere, and the
+      // preflight must not report mail.<domain> blindly.
+      const zoneSuffix = '.' + d;
+      const realDomains = customDomains.filter(x => x.service === m.workerName &&
+        (x.hostname === `mail.${d}` || x.hostname === d || x.hostname.endsWith(zoneSuffix)))
+        .map(x => x.hostname)
+        .sort((a, b2) => (a === `mail.${d}` ? 0 : a === d ? 1 : 2) - (b2 === `mail.${d}` ? 0 : b2 === d ? 1 : 2));
+      const siteDomain = realDomains[0] || `mail.${d}`;
       result[d] = {
         deployed: true,
         workerName: m.workerName,
-        siteDomain: `mail.${d}`,
+        siteDomain,
+        siteUrl: `https://${siteDomain}`,
         hasJwt: !!b.find(x => x.type === 'plain_text' && x.name === 'jwt_secret')?.text,
         // readable config summary
         admin: plain.admin || '',
         domains: Array.isArray(domainsVar) ? domainsVar : (plain.domain ? [plain.domain] : []),
-        mailDomain: `mail.${d}`,
+        mailDomain: siteDomain,
         dbId: b.find(x => x.type === 'd1')?.id || '',
         kvId: b.find(x => x.type === 'kv_namespace')?.namespace_id || b.find(x => x.type === 'kv_namespace')?.id || '',
         r2Bucket: b.find(x => x.type === 'r2_bucket')?.bucket_name || '',
@@ -109,6 +120,21 @@ export default async function (app) {
         // custom domains attached to THIS worker
         workerDomains: customDomains.filter(x => x.service === m.workerName).map(x => x.hostname)
       };
+      // 拉取信息阶段即核对站点管理里的网址：旧部署可能不是 mail.<域名>（用错根
+      // 账号域名等），发现不一致就只修正 site.base_url 这一个字段——邮件/用户/
+      // 凭证/版本号等其它数据一律不动。无记录则跳过（升级部署后会再核对一次）。
+      const actualUrl = `https://${siteDomain}`;
+      const siteRows = db.prepare('SELECT site_id, base_url FROM site WHERE worker_name = ? OR domain = ?')
+        .all(m.workerName, d);
+      const fixes = [];
+      for (const s of siteRows) {
+        const normalized = (s.base_url || '').replace(/\/+$/, '');
+        if (normalized !== actualUrl) {
+          db.prepare('UPDATE site SET base_url = ? WHERE site_id = ?').run(actualUrl, s.site_id);
+          fixes.push({ from: normalized || '(空)', to: actualUrl });
+        }
+      }
+      if (fixes.length) result[d].siteUrlFixed = fixes;
     }
     return { code: 200, data: result };
   });

@@ -8,3 +8,5 @@ data/
 sea-prep.blob
 pkg/
 server/data/
+data/panel.db
+data/panel_secret
