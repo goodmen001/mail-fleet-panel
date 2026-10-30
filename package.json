@@ -1,6 +1,6 @@
 {
   "name": "mail-fleet-panel",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "private": true,
   "description": "cloud-mail 批量部署与管理面板（Cloudflare Workers）"
 }
