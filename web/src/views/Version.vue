@@ -63,6 +63,44 @@
           </span>
         </el-form-item>
       </el-form>
+
+      <div class="sec-title" style="margin-top:8px">一键部署 API 反代（推荐）</div>
+      <el-alert type="success" show-icon :closable="false" style="margin-bottom:12px"
+        title="用面板里的 Cloudflare 凭证，把一个极小的 API 反代 Worker 部署到你自己的账号，并绑定 https://onlycf.你的域名（同时关闭 *.workers.dev 预览地址）。部署完成后自动填入上方代理地址。"/>
+      <el-form label-width="100px" style="max-width:640px">
+        <el-form-item label="凭证">
+          <el-select v-model="onlycf.credId" placeholder="选择 Cloudflare 凭证" style="width:280px" @change="loadZones">
+            <el-option v-for="c in creds" :key="c.credId" :label="c.name" :value="c.credId"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="域名">
+          <el-select v-model="onlycf.domain" placeholder="先选凭证，再选要绑定的域名" style="width:280px" :disabled="!onlycf.credId">
+            <el-option v-for="z in onlycf.zones" :key="z" :label="'onlycf.' + z" :value="z"/>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="部署">
+          <el-button size="small" type="primary" :disabled="!onlycf.credId || !onlycf.domain" :loading="onlycf.deploying" @click="deployOnlycf">一键部署</el-button>
+          <span v-if="onlycf.step" style="fontSize:12px;marginLeft:8px;color:#94a3b8">{{ onlycf.step }}</span>
+        </el-form-item>
+      </el-form>
+
+      <div class="sec-title" style="margin-top:8px">出站代理（SOCKS5 / HTTP）</div>
+      <el-alert type="info" show-icon :closable="false" style="margin-bottom:12px"
+        title="面板服务器走 v2ray/clash 等本地代理或公司 HTTP 代理时填写，例如 socks5://127.0.0.1:1080 或 http://user:pass@host:port。对所有 Cloudflare / GitHub API 请求生效。"/>
+      <el-form label-width="100px" style="max-width:640px">
+        <el-form-item label="代理地址">
+          <el-input v-model="outProxy.url" placeholder="留空 = 不使用（直连）" style="max-width:420px"/>
+        </el-form-item>
+        <el-form-item label="连接测试">
+          <el-button size="small" @click="testOutProxy" :loading="outProxy.testing">测试出站线路</el-button>
+          <span v-if="outProxy.result" :style="{color: outProxy.result.ok ? '#34d399' : '#f87171', fontSize: '12px', marginLeft: '8px'}">
+            {{ outProxy.result.ok ? '✓ 可用 (HTTP ' + outProxy.result.status + ', ' + outProxy.result.ms + 'ms, via ' + outProxy.result.via + ')' : '✗ ' + (outProxy.result.error || '失败') }}
+          </span>
+        </el-form-item>
+        <el-form-item label="">
+          <el-button size="small" type="primary" :loading="outProxy.saving" @click="saveOutProxy">保存出站代理</el-button>
+        </el-form-item>
+      </el-form>
     </div>
 
     <div class="tech-card" style="margin-top:20px">
@@ -406,6 +444,82 @@ async function testCfProxy(prefix) {
     cfTestResult.value = { ok: false, error: e.response?.data?.message || '请求失败' }
   }
 }
+
+// ---- one-click onlycf proxy deployment ----
+const creds = ref([])
+const onlycf = ref({ credId: null, domain: '', zones: [], deploying: false, step: '' })
+
+async function loadOnlycfCreds() {
+  try {
+    const { data } = await axios.get('/credential/list')
+    creds.value = data.data || []
+  } catch { /* ignore */ }
+}
+
+async function loadZones() {
+  onlycf.value.zones = []
+  onlycf.value.domain = ''
+  if (!onlycf.value.credId) return
+  try {
+    const { data } = await axios.get('/version/cfproxy/zones', { params: { credId: onlycf.value.credId } })
+    onlycf.value.zones = (data.data || []).map(z => z.name)
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '域名拉取失败')
+  }
+}
+
+async function deployOnlycf() {
+  onlycf.value.deploying = true
+  onlycf.value.step = '开始部署…'
+  try {
+    const { data } = await axios.post('/version/cfproxy/onlycf-deploy', { credId: onlycf.value.credId, domain: onlycf.value.domain })
+    if (data.code === 200) {
+      onlycf.value.step = '完成'
+      ElMessage.success(data.message)
+      await loadCfProxy()
+    } else {
+      onlycf.value.step = ''
+      ElMessage.error(data.message || '部署失败')
+    }
+  } catch (e) {
+    onlycf.value.step = ''
+    ElMessage.error(e.response?.data?.message || '部署失败')
+  } finally { onlycf.value.deploying = false }
+}
+
+// ---- outbound proxy (socks5/http) ----
+const outProxy = ref({ url: '', saving: false, testing: false, result: null })
+
+async function loadOutProxy() {
+  try {
+    const { data } = await axios.get('/version/outproxy')
+    outProxy.value.url = data.data?.url || ''
+  } catch { /* older server build */ }
+}
+
+async function saveOutProxy() {
+  outProxy.value.saving = true
+  try {
+    await axios.post('/version/outproxy', { url: outProxy.value.url })
+    ElMessage.success('出站代理已保存')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '保存失败')
+  } finally { outProxy.value.saving = false }
+}
+
+async function testOutProxy() {
+  outProxy.value.result = null
+  outProxy.value.testing = true
+  try {
+    const { data } = await axios.post('/version/outproxy/test')
+    outProxy.value.result = data.data
+  } catch (e) {
+    outProxy.value.result = { ok: false, error: e.response?.data?.message || '请求失败' }
+  } finally { outProxy.value.testing = false }
+}
+
+loadOnlycfCreds()
+loadOutProxy()
 
 async function check() {
   checking.value = true

@@ -9,6 +9,7 @@
 // Cloudflare does not publish public API mirrors, so there is no mirror list —
 // users who need a proxy run their own (e.g. a CF Worker reverse proxy).
 import db from '../db/index.js';
+import { getDispatcher } from './out-proxy.js';
 
 function getSetting(key) {
   try {
@@ -49,7 +50,7 @@ async function attempt(url, init, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    return await fetch(url, { ...init, signal: ctrl.signal, dispatcher: getDispatcher() });
   } catch {
     return null;
   } finally {

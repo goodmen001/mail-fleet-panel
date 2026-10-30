@@ -8,6 +8,9 @@ import zlib from 'node:zlib';
 import tar from 'tar-stream';
 import { ghFetch, getGhConfig, setGhConfig, KNOWN_MIRRORS } from '../services/gh-proxy.js';
 import { getCfConfig, setCfConfig } from '../services/cf-proxy.js';
+import { getOutProxyUrl, setOutProxyUrl, outProxyMode, testOutProxy } from '../services/out-proxy.js';
+import { listZones, deployProxyWorker, getProxyStatus, PROXY_HOST_PREFIX } from '../services/onlycf-proxy.js';
+import { credentialHeaders, accountIdOf } from './credential.js';
 
 const REPO = 'maillab/cloud-mail';
 const BRANCH = 'main';
@@ -138,6 +141,65 @@ export default async function (app) {
     } catch (e) {
       return { code: 200, data: { ok: false, status: 0, error: e.message } };
     } finally { clearTimeout(timer); }
+  });
+
+  // ---- outbound proxy (v0.6.0): socks5/http for api.cloudflare.com & github ----
+  app.get('/outproxy', { preHandler: [app.auth] }, async () => {
+    return { code: 200, data: { url: getOutProxyUrl(), mode: outProxyMode() } };
+  });
+
+  app.post('/outproxy', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    try {
+      setOutProxyUrl((req.body || {}).url);
+      return { code: 200, message: '出站代理已保存' };
+    } catch (e) {
+      return reply.code(400).send({ code: 400, message: e.message });
+    }
+  });
+
+  app.post('/outproxy/test', { preHandler: [app.auth, app.requireAdmin] }, async () => {
+    return { code: 200, data: await testOutProxy() };
+  });
+
+  // ---- one-click onlycf.<domain> API reverse-proxy (v0.6.0) ----
+  // zones of the chosen credential, for the domain dropdown
+  app.get('/cfproxy/zones', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    try {
+      const headers = credentialHeaders(req.query.credId);
+      if (!headers) return reply.code(404).send({ code: 404, message: '凭证不存在' });
+      return { code: 200, data: await listZones(headers) };
+    } catch (e) {
+      return { code: 400, message: e.message };
+    }
+  });
+
+  // deployment status of the proxy worker for a credential
+  app.get('/cfproxy/onlycf-status', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    try {
+      const headers = credentialHeaders(req.query.credId);
+      const accountId = accountIdOf(req.query.credId);
+      if (!headers || !accountId) return reply.code(404).send({ code: 404, message: '凭证不存在或缺账号 ID' });
+      return { code: 200, data: await getProxyStatus(headers, accountId) };
+    } catch (e) {
+      return { code: 400, message: e.message };
+    }
+  });
+
+  // one-click deploy: worker upload → disable workers.dev → bind onlycf.<domain>
+  app.post('/cfproxy/onlycf-deploy', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+    const { credId, domain } = req.body || {};
+    if (!credId || !domain) return reply.code(400).send({ code: 400, message: 'credId 与 domain 必填' });
+    const headers = credentialHeaders(credId);
+    if (!headers) return reply.code(404).send({ code: 404, message: '凭证不存在' });
+    const accountId = accountIdOf(credId);
+    if (!accountId) return reply.code(400).send({ code: 400, message: '凭证缺少账号 ID，请重新验证凭证' });
+    const steps = [];
+    try {
+      const r = await deployProxyWorker(headers, accountId, domain, (msg) => steps.push(msg));
+      return { code: 200, message: `已部署并启用 https://${r.hostname}`, data: { ...r, steps } };
+    } catch (e) {
+      return { code: 400, message: e.message, data: { steps } };
+    }
   });
 
   // custom file registry (upstream-diff tracking, unchanged)

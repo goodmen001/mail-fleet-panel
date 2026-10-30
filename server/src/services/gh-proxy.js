@@ -9,6 +9,7 @@
 // whole URL — the mirrors are transparent proxies that accept full GitHub URLs.
 
 import db from '../db/index.js';
+import { getDispatcher } from './out-proxy.js';
 
 // settings table lives in db/index.js migrations (below); keep reads defensive
 export const KNOWN_MIRRORS = [
@@ -61,7 +62,7 @@ async function attempt(url, init, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    const res = await fetch(url, { ...init, signal: ctrl.signal, dispatcher: getDispatcher() });
     if (res.status >= 500 || res.status === 403 || res.status === 429) return null;
     return res;
   } catch {
@@ -77,7 +78,7 @@ export async function ghFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
   const headers = { 'User-Agent': 'mail-fleet-panel', ...(init.headers || {}) };
 
   if (cfg.mode === 'direct') {
-    return fetch(url, { ...init, headers });
+    return fetch(url, { ...init, headers, dispatcher: getDispatcher() });
   }
   if (cfg.mode === 'custom' && cfg.customUrl) {
     const res = await attempt(withPrefix(cfg.customUrl, url), { ...init, headers }, timeoutMs);
@@ -104,7 +105,7 @@ export async function ghFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
     // a real GitHub 403/404 should surface, not a generic line error
     if (!m) {
       try {
-        directRes = await fetch(url, { ...init, headers });
+        directRes = await fetch(url, { ...init, headers, dispatcher: getDispatcher() });
       } catch (e) { lastErr = e; }
     }
   }
