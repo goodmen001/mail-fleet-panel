@@ -12,7 +12,12 @@
       </div>
       <el-table :data="sites" style="width:100%">
         <el-table-column prop="name" label="名称" width="160"/>
-        <el-table-column prop="base_url" label="地址" min-width="220"/>
+        <el-table-column prop="base_url" label="地址" min-width="220">
+          <template #default="{row}">
+            <span class="secret" v-if="!reveal">{{ maskUrl(row.base_url) }}</span>
+            <span v-else>{{ row.base_url }}</span>
+          </template>
+        </el-table-column>
         <el-table-column label="管理员" width="220">
           <template #default="{row}">
             <span class="secret" v-if="!reveal">{{ maskEmail(row.admin_email) }}</span>
@@ -111,12 +116,24 @@ const form = ref({ name: '', baseUrl: '', adminEmail: '', adminPassword: '' })
 
 // privacy toggle + email masking (default hidden: 隐私保护)
 const reveal = ref(false)
+// mask the domain suffix too: the host part of the url and the part after @
+const maskUrl = (u) => {
+  if (!u) return ''
+  try {
+    const { protocol, host } = new URL(u)
+    const parts = host.split('.')
+    const maskedHost = parts.map((p, i) => (i === parts.length - 1 ? '•••' : p.slice(0, 1) + '•••')).join('.')
+    return `${protocol}//${maskedHost}`
+  } catch { return '••••' }
+}
 const maskEmail = (e) => {
   if (!e) return ''
   const [local, domain] = e.split('@')
   if (!domain) return '••••'
   const head = local.slice(0, 2)
-  return `${head}${'•'.repeat(Math.max(3, local.length - 2))}@${domain}`
+  const dparts = domain.split('.')
+  const maskedDomain = dparts.map((p, i) => (i === dparts.length - 1 ? '•••' : p.slice(0, 1) + '•••')).join('.')
+  return `${head}${'•'.repeat(Math.max(3, local.length - 2))}@${maskedDomain}`
 }
 
 // ---- edit site ----
