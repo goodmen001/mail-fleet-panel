@@ -168,6 +168,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:
@@ -178,6 +183,8 @@ jobs:
             ghcr.io/${{ github.repository }}:latest
             ghcr.io/${{ github.repository }}:${{ github.sha }}
             ghcr.io/${{ github.repository }}:v${{ env.APP_VERSION }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/mail-fleet-panel:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/mail-fleet-panel:v${{ env.APP_VERSION }}
 
   publish:
     needs: [official, windows, docker]
@@ -205,10 +212,11 @@ jobs:
             data/ 目录为数据目录，备份它即可。
 
             ### Docker / docker-compose
+            镜像双源：`ghcr.io/goodmen001/mail-fleet-panel` 或 `docker.io/xuexinas/mail-fleet-panel`（Docker Hub）
             ```yaml
             services:
               mail-fleet-panel:
-                image: ghcr.io/goodmen001/mail-fleet-panel:v${{ needs.official.outputs.version }}
+                image: xuexinas/mail-fleet-panel:v${{ needs.official.outputs.version }}
                 container_name: mail-fleet-panel
                 ports:
                   - "3300:3300"
