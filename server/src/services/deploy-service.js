@@ -12,7 +12,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import blake3 from '../vendor/blake3-inline.cjs';
-import { cfFetch } from './cf-proxy.js';
+import { cfFetch, cfFormData } from './cf-proxy.js';
 
 const CF_API = (process.env.CF_API_BASE || 'https://api.cloudflare.com') + '/client/v4';
 
@@ -80,7 +80,7 @@ async function uploadAssets(headers, accountId, workerName, workerDistDir, step)
     // hash → path index (case-insensitive compare, CF sometimes normalizes case)
     const byHash = new Map();
     for (const k of Object.keys(manifest)) byHash.set(manifest[k].hash.toLowerCase(), k.slice(1));
-    const form = new FormData();
+    const form = await cfFormData();
     for (const entry of missing) {
       const relPath = byHash.get(String(entry.hash).toLowerCase());
       if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
@@ -99,7 +99,7 @@ async function uploadAssets(headers, accountId, workerName, workerDistDir, step)
 
 async function putWorkerScript(headers, accountId, workerName, workerDistDir, metadata) {
   const workerJs = fs.readFileSync(path.join(workerDistDir, 'worker.js'));
-  const form = new FormData();
+  const form = await cfFormData();
   form.append('metadata', JSON.stringify(metadata));
   form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
   await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
@@ -412,10 +412,23 @@ export async function matchMailWorkerDeep(mailWorkers, customDomains, headers, a
 
 // detect whether `domain` is already served by one of the account's mail
 // workers — deep match (custom domains + zone routes + email routing rules +
-// D1 names), so it also catches older deployments not on mail.<domain>
+// D1 names), so it also catches older deployments not on mail.<domain>.
+// siteUrl reflects the domain ACTUALLY bound to that worker (preferred:
+// mail.<domain>, then the apex, then any sub-domain of it) — deployments made
+// with an older panel/wrong input may live on a different hostname than
+// mail.<domain>, and the site manager record must not lie about it.
 export async function findDeployedWorker(headers, accountId, domain) {
   const mailWorkers = await listMailWorkers(headers, accountId);
   const customDomains = await listWorkerCustomDomains(headers, accountId);
   const m = await matchMailWorkerDeep(mailWorkers, customDomains, headers, accountId, domain);
-  return m ? { workerName: m.workerName, siteDomain: `mail.${domain}`, settings: m.settings } : null;
+  if (!m) return null;
+  const zoneSuffix = '.' + domain;
+  const candidates = customDomains
+    .filter(d => d.service === m.workerName &&
+      (d.hostname === `mail.${domain}` || d.hostname === domain || d.hostname.endsWith(zoneSuffix)))
+    .sort((a, b) => // mail.<domain> first, then apex, then other sub-domains
+      (a.hostname === `mail.${domain}` ? 0 : a.hostname === domain ? 1 : 2) -
+      (b.hostname === `mail.${domain}` ? 0 : b.hostname === domain ? 1 : 2));
+  const siteDomain = candidates[0]?.hostname || `mail.${domain}`;
+  return { workerName: m.workerName, siteDomain, siteUrl: `https://${siteDomain}`, settings: m.settings };
 }

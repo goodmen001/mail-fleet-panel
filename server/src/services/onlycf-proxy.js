@@ -9,7 +9,7 @@
 //   1. PUT /accounts/{a}/workers/scripts/onlycf-proxy  (module worker)
 //   2. PUT /accounts/{a}/workers/scripts/onlycf-proxy/subdomain  {enabled:false}
 //   3. PUT /accounts/{a}/workers/domains  {hostname: onlycf.<domain>}
-import { cfFetch } from './cf-proxy.js';
+import { cfFetch, cfFormData } from './cf-proxy.js';
 import db from '../db/index.js';
 
 export const PROXY_WORKER_NAME = 'onlycf-proxy';
@@ -97,8 +97,8 @@ export async function deployProxyWorker(headers, accountId, domain, onStep) {
     bindings: [],
     migrations: { new_tag: 'v1' }
   };
-  const form = new FormData();
-  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  const form = await cfFormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }), 'metadata.json');
   form.append('proxy.js', new Blob([WORKER_SRC], { type: 'application/javascript+module' }), 'proxy.js');
   const res = await cfFetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/${PROXY_WORKER_NAME}`, {
     method: 'PUT', headers, body: form

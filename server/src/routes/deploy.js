@@ -180,6 +180,22 @@ export default async function (app) {
         if (existing) {
           step(`检测到已部署的邮箱服务（Worker: ${existing.workerName}${existing.settings ? '，配置已读出' : ''}），进入升级模式：只更新邮局程序，原邮件/用户/配置数据不动`);
           const ur = await upgradeDeployedMail(j.headers, j.accountId, existing.workerName, j.pkgDir, step, existing.settings);
+          // 升级后核对站点网址：早期可能用错根账号域名部署，站点管理里记录的
+          // base_url 与 Worker 实际绑定的域名不符。只修正 site.base_url 这一个
+          // 字段（按 worker_name 定位），邮件/用户/凭证/版本号等其它数据一律不动。
+          const actualUrl = existing.siteUrl;
+          const siteRows = db.prepare('SELECT site_id, base_url FROM site WHERE worker_name = ? OR domain = ?')
+            .all(existing.workerName, j.domain);
+          for (const s of siteRows) {
+            const normalized = (s.base_url || '').replace(/\/+$/, '');
+            if (normalized !== actualUrl) {
+              db.prepare('UPDATE site SET base_url = ? WHERE site_id = ?').run(actualUrl, s.site_id);
+              step(`站点网址已核对修正：${normalized || '(空)'} → ${actualUrl}（仅修正网址，其它数据未动）`);
+            } else {
+              step(`站点网址核对无误：${actualUrl}`);
+            }
+          }
+          if (!siteRows.length) step(`站点管理中未找到该站点的记录，未做网址修正（实际地址：${actualUrl}）`);
           db.prepare('UPDATE deploy_record SET status=?, steps=? WHERE deploy_id=?')
             .run('success', JSON.stringify(steps), j.recordId);
           return;

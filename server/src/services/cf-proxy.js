@@ -62,6 +62,17 @@ async function attempt(url, init, timeoutMs) {
   }
 }
 
+// multipart bodies for the CF Workers upload API must use undici's own
+// FormData: npm undici's fetch cannot serialize the Node built-in FormData —
+// it stringifies the whole thing to "[object FormData]" with Content-Type
+// text/plain, and CF rejects it with "Content-Type must be one of:
+// application/javascript, text/javascript, multipart/form-data". Node's Blob
+// is fine as the part source (verified: correct boundary + part content types).
+export async function cfFormData() {
+  const { FormData } = await import('undici');
+  return new FormData();
+}
+
 // single entry point for every api.cloudflare.com call in the panel.
 // Only https://api.cloudflare.com URLs are routed; other hosts pass through.
 export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
