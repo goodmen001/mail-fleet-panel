@@ -5,6 +5,7 @@ import fs from 'node:fs';
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
+export const dataDir = DATA_DIR;
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'panel.db'));
 db.exec('PRAGMA journal_mode = WAL');
@@ -75,6 +76,7 @@ CREATE TABLE IF NOT EXISTS deploy_record (
   cred_id INTEGER NOT NULL,
   status TEXT DEFAULT 'running',           -- running|success|failed
   steps TEXT,                              -- JSON log
+  pkg_id INTEGER,                          -- version-center package used (null = built-in)
   create_time DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS custom_file (
@@ -91,8 +93,29 @@ CREATE TABLE IF NOT EXISTS version_state (
 
 // migration: auth email for Global API Key credentials (must run AFTER table creation)
 try { db.exec('ALTER TABLE cf_credential ADD COLUMN auth_email TEXT'); } catch { /* exists */ }
+// migration for pre-v24 databases
+try { db.exec('ALTER TABLE deploy_record ADD COLUMN pkg_id INTEGER'); } catch { /* exists */ }
 
 // seed version state
 db.prepare(`INSERT OR IGNORE INTO version_state (id) VALUES (1)`).run();
 
 export default db;
+// v24: deployment package registry (version center) + per-user data isolation
+db.exec(`
+CREATE TABLE IF NOT EXISTS pkg_version (
+  pkg_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'custom',     -- custom | official
+  version TEXT,
+  tag TEXT,                                -- official: GitHub release tag
+  dir TEXT NOT NULL,                       -- absolute path to the extracted deploy dir
+  note TEXT,
+  create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+`);
+
+// owner_id on site / deploy_record / cf_credential: panel user who owns the
+// row; NULL = legacy/admin. Admins see everything, users only their own.
+for (const t of ['site', 'deploy_record', 'cf_credential']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN owner_id INTEGER`); } catch { /* exists */ }
+}

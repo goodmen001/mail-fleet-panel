@@ -6,10 +6,12 @@
         <span>Mail Fleet</span>
       </div>
       <nav>
-        <router-link v-for="m in menus" :key="m.path" :to="m.path" class="nav-item">
-          <Icon :icon="m.icon" width="19" height="19"/>
-          <span>{{ m.title }}</span>
-        </router-link>
+        <template v-for="m in menus" :key="m.path">
+          <router-link v-if="!m.admin || user?.role === 'admin'" :to="m.path" class="nav-item">
+            <Icon :icon="m.icon" width="19" height="19"/>
+            <span>{{ m.title }}</span>
+          </router-link>
+        </template>
       </nav>
       <div class="foot" @click="logout">
         <Icon icon="mdi:logout" width="18" height="18"/>
@@ -19,28 +21,56 @@
     <main class="main">
       <header class="topbar">
         <span class="page-title">{{ $route.meta.title }}</span>
-        <span class="me">{{ user?.username }} <el-tag size="small" effect="dark">{{ user?.role }}</el-tag></span>
+        <span class="me">
+          {{ user?.username }} <el-tag size="small" effect="dark">{{ user?.role === 'admin' ? '管理员' : '用户' }}</el-tag>
+          <el-button size="small" link @click="pwdShow = true"><Icon icon="mdi:lock-reset" width="15"/>改密</el-button>
+        </span>
       </header>
       <div class="content">
         <router-view/>
       </div>
     </main>
+    <el-dialog v-model="pwdShow" title="修改密码" width="400">
+      <el-form label-width="80px">
+        <el-form-item label="原密码"><el-input v-model="pwdForm.oldPassword" type="password" show-password/></el-form-item>
+        <el-form-item label="新密码"><el-input v-model="pwdForm.newPassword" type="password" show-password placeholder="至少6位"/></el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdShow = false">取消</el-button>
+        <el-button type="primary" @click="changePwd">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import { Icon } from '@iconify/vue'
+import axios from 'axios'
 
 const router = useRouter()
+const pwdShow = ref(false)
+const pwdForm = ref({ oldPassword: '', newPassword: '' })
+
+async function changePwd() {
+  try {
+    await axios.put('/user/password', pwdForm.value)
+    ElMessage.success('密码已修改')
+    pwdShow.value = false
+    pwdForm.value = { oldPassword: '', newPassword: '' }
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '修改失败')
+  }
+}
 const user = computed(() => JSON.parse(localStorage.getItem('panel_user') || '{}'))
 
 const menus = [
   { path: '/sites', icon: 'mdi:server-network', title: '站点管理' },
   { path: '/deploy', icon: 'mdi:rocket-launch-outline', title: '部署中心' },
   { path: '/version', icon: 'mdi:source-branch', title: '版本中心' },
-  { path: '/users', icon: 'mdi:account-group-outline', title: '用户管理' },
+  { path: '/users', icon: 'mdi:account-group-outline', title: '用户管理', admin: true },
 ]
 
 function logout() {

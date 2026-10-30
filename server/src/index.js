@@ -1,6 +1,7 @@
 import fastify from 'fastify';
 import cors from '@fastify/cors';
 import jwt from '@fastify/jwt';
+import multipart from '@fastify/multipart';
 import staticFiles from '@fastify/static';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,9 +18,15 @@ import userRoutes from './routes/user.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = fastify({ logger: false, bodyLimit: 10 * 1024 * 1024 });
 
+// background jobs (deploy, package import) must never take the panel down
+process.on('unhandledRejection', e => console.error('[unhandledRejection]', e));
+process.on('uncaughtException', e => console.error('[uncaughtException]', e));
+
 async function main() {
 await app.register(cors, { origin: true });
 await app.register(jwt, { secret: process.env.PANEL_SECRET || 'change-me-in-production' });
+// multipart for version-center package uploads
+await app.register(multipart);
 
 app.decorate('auth', async (req, reply) => {
   try {

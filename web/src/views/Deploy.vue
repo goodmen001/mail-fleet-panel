@@ -1,8 +1,8 @@
 <template>
   <div>
     <div class="tech-card">
-      <div class="tech-title"><Icon icon="mdi:key-chain"/>Cloudflare 凭证库</div>
-      <el-button type="primary" size="small" @click="openAddCred" v-if="isAdmin" style="margin-bottom:12px">添加凭证</el-button>
+      <div class="tech-title"><Icon icon="mdi:key-chain"/>Cloudflare 凭证库<span class="tip-txt" style="margin-left:10px;font-weight:400">仅显示 {{ isAdmin ? '全部用户的' : '你自己的' }}凭证</span></div>
+      <el-button type="primary" size="small" @click="openAddCred" style="margin-bottom:12px">添加凭证</el-button>
       <el-table :data="creds" size="small">
         <el-table-column prop="name" label="名称" width="150"/>
         <el-table-column prop="kind" label="类型" width="100">
@@ -32,6 +32,15 @@
       </div>
       <el-alert type="info" show-icon :closable="false" style="margin-bottom:16px"
         title="部署内容：D1 数据库 + KV + Worker + 自定义域名 + Email Routing，全自动一条龙。选择凭证后自动带出该账号下的域名；每个域名可单独指定管理员邮箱，不同 Cloudflare 账号可分开配置。"/>
+
+      <el-form-item label="部署包" label-width="80px" style="margin-bottom:14px">
+        <el-select v-model="pkgId" placeholder="使用面板内置定制包" style="width:320px" clearable>
+          <el-option label="内置定制包（随面板安装）" :value="0"/>
+          <el-option v-for="p in pkgs" :key="p.pkgId" :value="p.pkgId"
+            :label="(p.kind === 'custom' ? '[定制] ' : '[官方] ') + p.name + (p.version ? ' v' + p.version : '')"/>
+        </el-select>
+        <span class="tip-txt" style="margin-left:10px">在版本中心可上传定制包 / 导入官方包；留空使用内置定制包</span>
+      </el-form-item>
 
       <div v-for="(g, gi) in groups" :key="gi" class="cred-group">
         <div class="group-head">
@@ -159,6 +168,16 @@ const maskDomain = (d) => {
 
 // per-account deployment groups
 const groups = ref([])
+// deployment package: 0/undefined = built-in custom package, else pkgId from version center
+const pkgId = ref(0)
+const pkgs = ref([])
+
+async function loadPkgs() {
+  try {
+    const { data } = await axios.get('/version/pkgs')
+    pkgs.value = (data.data || []).filter(p => p.exists)
+  } catch { /* version center unreachable — keep builtin only */ }
+}
 
 function newGroup() {
   return { credId: null, zones: [], rows: [{ domain: '', adminEmail: '' }], loadingZones: false, zoneError: '' }
@@ -239,7 +258,7 @@ async function startDeploy() {
     const domains = g.rows.filter(r => r.domain && r.adminEmail).map(r => ({ domain: r.domain.trim(), adminEmail: r.adminEmail.trim() }))
     if (!domains.length) continue
     // check duplicate domains
-    items.push({ credId: g.credId, domains })
+    items.push({ credId: g.credId, pkgId: pkgId.value || null, domains })
   }
   if (!items.length) return ElMessage.warning('没有可部署的域名（每个域名需要域名+管理员邮箱）')
   const all = items.flatMap(i => i.domains.map(d => d.domain))
@@ -255,7 +274,7 @@ async function startDeploy() {
   } finally { deploying.value = false }
 }
 
-onMounted(() => { load(); addGroup() })
+onMounted(() => { load(); loadPkgs(); addGroup() })
 </script>
 
 <style scoped>

@@ -1,5 +1,13 @@
 import db, { encrypt, decrypt } from '../db/index.js';
 
+// data isolation: load a site and enforce ownership for non-admins
+function ownedSite(app, req, siteId) {
+  const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
+  if (!site) return { code: 404, message: '站点不存在' };
+  if (req.user.role !== 'admin' && site.owner_id !== req.user.uid) return { code: 403, message: '无权访问该站点' };
+  return { site };
+}
+
 function maskSite(s) {
   return { ...s, admin_password_enc: undefined, jwt_cache: undefined, hasPassword: !!s.admin_password_enc };
 }
@@ -18,12 +26,14 @@ async function siteLogin(site) {
 }
 
 export default async function (app) {
-  app.get('/list', { preHandler: [app.auth] }, async () => {
-    const list = db.prepare('SELECT * FROM site ORDER BY site_id').all().map(maskSite);
-    return { code: 200, data: list };
+  app.get('/list', { preHandler: [app.auth] }, async (req) => {
+    const rows = req.user.role === 'admin'
+      ? db.prepare('SELECT * FROM site ORDER BY site_id').all()
+      : db.prepare('SELECT * FROM site WHERE owner_id = ? ORDER BY site_id').all(req.user.uid);
+    return { code: 200, data: rows.map(maskSite) };
   });
 
-  app.post('/add', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+  app.post('/add', { preHandler: [app.auth] }, async (req, reply) => {
     const { name, baseUrl, adminEmail, adminPassword, credId, domain, workerName } = req.body || {};
     if (!name || !baseUrl || !adminEmail || !adminPassword) {
       return reply.code(400).send({ code: 400, message: '名称、地址、管理员邮箱、密码必填' });
@@ -36,19 +46,20 @@ export default async function (app) {
     } catch (e) {
       return reply.code(400).send({ code: 400, message: '站点连接/登录失败: ' + e.message });
     }
-    db.prepare("INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache) VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)")
-      .run(name, url, adminEmail, encrypt(adminPassword), credId || null, domain || null, workerName || null, 'online', token);
+    db.prepare("INSERT INTO site (name, base_url, admin_email, admin_password_enc, cred_id, domain, worker_name, status, last_check, jwt_cache, owner_id) VALUES (?,?,?,?,?,?,?,?,datetime('now'),?,?)")
+      .run(name, url, adminEmail, encrypt(adminPassword), credId || null, domain || null, workerName || null, 'online', token, req.user.uid);
     return { code: 200, message: '站点已接入' };
   });
 
   // edit: rename / change base url / change admin email, optionally reset the
   // admin password. Re-verifies the site login whenever any credential-affecting
   // field changes; clears the cached jwt so the next proxy call re-logins.
-  app.put('/edit', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
+  app.put('/edit', { preHandler: [app.auth] }, async (req, reply) => {
     const siteId = Number(req.body?.siteId);
     const { name, baseUrl, adminEmail, adminPassword } = req.body || {};
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(siteId);
-    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    const o = ownedSite(app, req, siteId);
+    if (o.code) return reply.code(o.code).send(o);
+    const site = o.site;
     if (!name || !baseUrl || !adminEmail) {
       return reply.code(400).send({ code: 400, message: '名称、站点地址、管理员邮箱必填' });
     }
@@ -74,15 +85,18 @@ export default async function (app) {
     return { code: 200, message: '站点已更新' };
   });
 
-  app.delete('/delete', { preHandler: [app.auth, app.requireAdmin] }, async (req) => {
-    db.prepare('DELETE FROM site WHERE site_id = ?').run(req.query.siteId);
+  app.delete('/delete', { preHandler: [app.auth] }, async (req, reply) => {
+    const o = ownedSite(app, req, Number(req.query.siteId));
+    if (o.code) return reply.code(o.code).send(o);
+    db.prepare('DELETE FROM site WHERE site_id = ?').run(o.site.site_id);
     return { code: 200, message: '已删除' };
   });
 
   // health check
-  app.post('/check/:siteId', { preHandler: [app.auth] }, async (req) => {
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return { code: 404 };
+  app.post('/check/:siteId', { preHandler: [app.auth] }, async (req, reply) => {
+    const o = ownedSite(app, req, Number(req.params.siteId));
+    if (o.code) return reply.code(o.code).send(o);
+    const site = o.site;
     let status = 'offline';
     try {
       const token = await siteLogin(site);
@@ -96,11 +110,11 @@ export default async function (app) {
 
   // proxy: get a fresh token for iframe auto-login
   app.post('/console/:siteId/token', { preHandler: [app.auth] }, async (req, reply) => {
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    const o = ownedSite(app, req, Number(req.params.siteId));
+    if (o.code) return reply.code(o.code).send(o);
     try {
-      const token = await siteLogin(site);
-      return { code: 200, data: { token, baseUrl: site.base_url } };
+      const token = await siteLogin(o.site);
+      return { code: 200, data: { token, baseUrl: o.site.base_url } };
     } catch (e) {
       return reply.code(502).send({ code: 502, message: '站点登录失败: ' + e.message });
     }
@@ -112,9 +126,10 @@ export default async function (app) {
   // The console opens the site directly in a new tab instead (see Sites.vue).
 
   // reveal admin password (for manual login on the site console)
-  app.get('/password/:siteId', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+  app.get('/password/:siteId', { preHandler: [app.auth] }, async (req, reply) => {
+    const o = ownedSite(app, req, Number(req.params.siteId));
+    if (o.code) return reply.code(o.code).send(o);
+    const site = o.site;
     try {
       return { code: 200, data: { email: site.admin_email, password: decrypt(site.admin_password_enc) } };
     } catch {
@@ -128,8 +143,10 @@ export default async function (app) {
   // row of open consoles doesn't hammer every site on each poll.
   const unreadCache = new Map(); // siteId -> { at, unread }
   const UNREAD_TTL = 30 * 1000;
-  app.get('/unread', { preHandler: [app.auth] }, async () => {
-    const sites = db.prepare('SELECT * FROM site ORDER BY site_id').all();
+  app.get('/unread', { preHandler: [app.auth] }, async (req) => {
+    const sites = req.user.role === 'admin'
+      ? db.prepare('SELECT * FROM site ORDER BY site_id').all()
+      : db.prepare('SELECT * FROM site WHERE owner_id = ? ORDER BY site_id').all(req.user.uid);
     const now = Date.now();
     await Promise.all(sites.map(async s => {
       const c = unreadCache.get(s.site_id);
@@ -161,8 +178,9 @@ export default async function (app) {
 
   // generic API proxy to a site (for health/stats in panel UI)
   app.all('/proxy/:siteId/*', { preHandler: [app.auth] }, async (req, reply) => {
-    const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(req.params.siteId);
-    if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    const o = ownedSite(app, req, Number(req.params.siteId));
+    if (o.code) return reply.code(o.code).send(o);
+    const site = o.site;
     let token = site.jwt_cache;
     const target = site.base_url + '/' + req.params['*'] + (req.raw.url.includes('?') ? '?' + req.raw.url.split('?')[1] : '');
     const res = await fetch(target, {

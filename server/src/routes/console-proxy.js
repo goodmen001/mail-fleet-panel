@@ -142,6 +142,7 @@ export default async function (app) {
   app.post('/prepare/:siteId', { preHandler: [app.auth] }, async (req, reply) => {
     const site = db.prepare('SELECT * FROM site WHERE site_id = ?').get(Number(req.params.siteId) || 0);
     if (!site) return reply.code(404).send({ code: 404, message: '站点不存在' });
+    if (req.user.role !== 'admin' && site.owner_id !== req.user.uid) return reply.code(403).send({ code: 403, message: '无权访问该站点' });
     return { code: 200, data: { key: makeKey(site.site_id), expiresIn: EMBED_TTL_MS } };
   });
 
