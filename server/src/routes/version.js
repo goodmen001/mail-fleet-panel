@@ -288,11 +288,29 @@ export default async function (app) {
   // version center as a custom package (no build needed — CI built it)
   app.post('/pkgs/sync-github', { preHandler: [app.auth, app.requireAdmin] }, async (req, reply) => {
     const { downloadUrl, name, note } = req.body || {};
-    if (!downloadUrl || !downloadUrl.startsWith(`https://api.github.com/repos/${SELF_REPO}/releases/assets/`)) {
-      return reply.code(400).send({ code: 400, message: 'downloadUrl 必须是本仓库 Release 的资源地址' });
+    // accept either the browser download URL or the API asset URL
+    const m = (downloadUrl || '').match(
+      new RegExp(`^https://(github\\.com/${SELF_REPO}/releases/download/[^/]+/(custom-worker-dist-[^/]+\\.zip)|api\\.github\\.com/repos/${SELF_REPO}/releases/assets/\\d+)`)
+    );
+    if (!m) return reply.code(400).send({ code: 400, message: 'downloadUrl 必须是本仓库 Release 的资源地址' });
+    let assetUrl = downloadUrl;
+    if (m[2]) {
+      // browser URL → API asset URL (API + Accept: octet-stream handles private repos too)
+      const assetName = m[2];
+      const rel = await fetch(`https://api.github.com/repos/${SELF_REPO}/releases?per_page=30`, {
+        headers: { 'User-Agent': 'mail-fleet-panel', ...(process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}) }
+      });
+      const rels = rel.ok ? await rel.json() : [];
+      let assetId = null;
+      for (const r of rels) {
+        const a = (r.assets || []).find(a => a.name === assetName);
+        if (a) { assetId = a.id; break; }
+      }
+      if (!assetId) return reply.code(404).send({ code: 404, message: `未找到资源 ${assetName}` });
+      assetUrl = `https://api.github.com/repos/${SELF_REPO}/releases/assets/${assetId}`;
     }
     try {
-      const res = await fetch(downloadUrl, {
+      const res = await fetch(assetUrl, {
         headers: {
           'User-Agent': 'mail-fleet-panel',
           Accept: 'application/octet-stream',
