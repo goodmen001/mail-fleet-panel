@@ -21,10 +21,28 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// 64x64 fully-opaque icon: dark navy rounded square + bright cyan envelope
-// (bolder than the old semi-transparent blue — visible on light & dark taskbars)
-const ICON_PNG_BASE64 =
-  'iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABBUlEQVR42u3bMQ6DMAyF4dygY/eOvf9Neo9egW4sFBRix89JfqSsdt+npAKBS6m8Hs/3NtIq1mu0wG4gswW/BTF7+EuEVcKfIiwNsFr4AwIAACwMsGr4HQEAAAAAAAAAADhdr893+AUAAJ0AMp1l2Q7IHj7sCGQMHv4fkDG8K0BtY3Xwf7/bDUCJcKdvV4BoiJY+IQARCK31wwB6QVjrhQN4InjUkQB4blvrLpICtITpeYQkAJ4PU9a+UgArgkdPOYDitjolgOrmKRXAFUSv+ikBstSWAkQ9NQIAAAAA8F4AAAB4OwwAAAAAAAAAfC/M1+IAAMDcEFNjDE4yOsvw9NzT5LW5fpNwg+mTHGUgAAAAAElFTkSuQmCC';
+// Multi-size (16/24/32/48/64) FULLY-OPAQUE ICO: dark navy square + bright cyan
+// envelope. v0.5.3 lessons from real Windows:
+//   - PNG icon: systray-portable on Windows expects .ico content; a PNG was
+//     rendered with broken alpha (looked white/semi-transparent on taskbars).
+//     ICO with 32bpp ARGB entries renders exactly as drawn, at every DPI.
+//   - clicks: this Go binary (zaaack/systray-portable) emits
+//     {"type":"clicked","item":{title,tooltip,enabled,checked},"seq_id":<index>}
+//     — NO `id`/`__id` fields (those are added by the systray2 JS wrapper, which
+//     we do not use). Match by item.title first, seq_id as fallback.
+const ICON_ICO_BASE64 =
+  'AAABAAUAEBAAAAEAIAB1AAAAVgAAABgYAAABACAAigAAAMsAAAAgIAAAAQAgAKIAAABVAQAAMDAAAAEAIADVAAAA9wEAAEBAAAAB' +
+  'ACAAHQEAAMwCAACJUE5HDQoaCgAAAA1JSERSAAAAEAAAABAIBgAAAB/z/2EAAAA8SURBVHicY+AX1/pPCWYYNQBhgNLldyRjDAOwGYbLZrwGoCvEZhjRBuAy' +
+  'jCwDKHYBQQMoioWBT0gDZgAA96yV5x7jixQAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAGAAAABgIBgAAAOB3PfgAAABRSURBVHicY+AX1/pPS8ww' +
+  'asGoBdS1QOnyO6phoi0gx9V4LaCGhURbQK5FJFtAqmUUWUDIQqpbQMhnVLMAm2U0tYDqQUS0BTTNybTAoxaMAAsAT2l2KjSIinAAAAAASUVORK5CYIKJUE5H' +
+  'DQoaCgAAAA1JSERSAAAAIAAAACAIBgAAAHN6evQAAABpSURBVHic7dWxDQAgDAMwPmBkZ+T/T/iDF+ABQIWWhiFD5lpRpIaYSkcmEEAAAV8Bcm14gEf+B+ww' +
+  '2srFAEkzbgBLjBqgxZgCbjDPAFKMC+CkmeeAFQYCmN2AAFw3cAWA/QJECCCAAAIGdsAx76qMiogAAAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAMAAA' +
+  'ADAIBgAAAFcC+YcAAACcSURBVHic7dK5DYAwFARRd0BITkj/ndAHLUCOEODje9Zig0kcWPtkp2lej5FL9AAD6AEG0AMMoAcYQA8wgB4QAli2HR9WDRgF8QhQ' +
+  'zIC3C6MqAuSApAGlryQN6A0JA/SChANKUPKAli+DAVphJAA1IElADkQaUPPN5ABfQEMB7iAGkIDruQHSAMX+ARgpA+gMoDOAzgA6A+gMoDsBXS/MHJViMgIA' +
+  'AAAASUVORK5CYIKJUE5HDQoaCgAAAA1JSERSAAAAQAAAAEAIBgAAAKppcd4AAADkSURBVHic7dMxEsIgFAbh3MDS3jL3v4n38Apa2YVRAmHhvS22CzN/voHt' +
+  'dt/fmdvoAXQC0APoBKAH0AlAD6ATgB5AJwA9gE4AegCdAPQAuiLA4/nCx+EA3+iROECEBBBgIAD9ro/+oQmgBSYcwEoYlwPMjjEUYEYMDOAsRkgAEmM6gNEY' +
+  'UwOcgajdsgTAlRjLAfTGWBqgB0YYgBaMcAA9bkYYgFqM0AD/YKQBKEEIkBmg9I0AAgjw+3CEBBCgEiBLAtAD6ASgB9AJQA+gE4AeQCcAPYBOAHoAnQD0ADoB' +
+  '6AF06QE+6HnBbaWxFtEAAAAASUVORK5CYII=';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -50,7 +68,7 @@ let trayProc = null;
 // build the menu JSON; ids are strings the Go binary echoes back on click
 function buildMenu(tooltip) {
   return {
-    icon: ICON_PNG_BASE64,
+    icon: ICON_ICO_BASE64,
     title: 'Mail Fleet Panel',
     tooltip: tooltip || 'Mail Fleet Panel',
     items: [
@@ -85,13 +103,12 @@ export function startTray({ url, tooltip, onOpen, onQuit }) {
           // first contact → push the whole menu
           send(buildMenu(tooltip));
         } else if (action.type === 'clicked') {
-          // the Go binary may echo only {__id, item:{...partial}} — match on
-          // BOTH the custom string id AND the numeric __id fallback
-          const customId = action.item?.id;
-          const numId = action.__id;
-          // open is item 0, quit is item 2 in our fixed menu (0-based, separator counts)
-          if (customId === 'open' || numId === 0 || action.item_id === 0) onOpen?.();
-          else if (customId === 'quit' || numId === 2) onQuit?.();
+          // systray-portable emits {type:'clicked', item:{title,...}, seq_id:N}
+          // — no id/__id fields. Match by title (always present), then seq_id.
+          const title = action.item?.title || '';
+          const seq = action.seq_id;
+          if (title.includes('退出') || seq === 2) onQuit?.();
+          else if (title.includes('打开') || seq === 0) onOpen?.();
         }
       }
     });
