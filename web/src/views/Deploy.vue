@@ -47,7 +47,8 @@
         <div class="group-head">
           <span class="group-label">账号 {{ gi + 1 }}</span>
           <el-select v-model="g.credId" placeholder="选择 Cloudflare 凭证" style="width:240px" @change="onCredChange(g)">
-            <el-option v-for="c in creds" :key="c.credId" :label="c.name" :value="c.credId"/>
+            <!-- 已被其它账号分组选中的凭证不再出现，避免同一账号重复部署 -->
+            <el-option v-for="c in availCreds(g)" :key="c.credId" :label="c.name" :value="c.credId"/>
           </el-select>
           <span v-if="g.loadingZones" class="tip-txt">拉取域名中...</span>
           <span v-else-if="g.zoneError" class="tip-err">{{ g.zoneError }}</span>
@@ -252,6 +253,11 @@ function prefillRows(g) {
 }
 function addGroup() { groups.value.push(newGroup()) }
 function removeGroup(i) { groups.value.splice(i, 1) }
+
+// 某分组可选凭证 = 全部凭证 - 其它分组已选中的
+function availCreds(g) {
+  return creds.value.filter(c => c.credId === g.credId || !groups.value.some(x => x !== g && x.credId === c.credId))
+}
 
 function defaultEmail(g) {
   const first = g.zones[0]?.name

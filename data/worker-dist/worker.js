@@ -71791,6 +71791,98 @@ hono_default.delete("/my/delete", async (c3) => {
   return c3.json(result_default.ok());
 });
 
+// src/entity/account-note.js
+var accountNote = sqliteTable("account_note", {
+  noteId: integer("note_id").primaryKey({ autoIncrement: true }),
+  accountId: integer("account_id").notNull(),
+  userId: integer("user_id").notNull(),
+  content: text("content").notNull().default(""),
+  updateTime: text("update_time").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+var account_note_default = accountNote;
+
+// src/service/note-service.js
+var MAX_LEN = 5e3;
+var tableReady = false;
+async function ensureTable(c3) {
+  if (tableReady) return;
+  try {
+    await c3.env.db.prepare(
+      `CREATE TABLE IF NOT EXISTS account_note (
+				note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				account_id INTEGER NOT NULL,
+				user_id INTEGER NOT NULL,
+				content TEXT NOT NULL DEFAULT '',
+				update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+			)`
+    ).run();
+    await c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_note_uk ON account_note(account_id, user_id)`).run();
+    tableReady = true;
+  } catch (e3) {
+    if (!String(e3?.message || "").includes("already exists")) throw e3;
+    tableReady = true;
+  }
+}
+__name(ensureTable, "ensureTable");
+var noteService = {
+  // 读取某邮箱的笔记（悬停预览与编辑弹窗共用；返回 null 表示尚无笔记）
+  async get(c3, accountId, userId) {
+    await ensureTable(c3);
+    await this.checkAccount(c3, accountId, userId);
+    const row = await orm(c3).select().from(account_note_default).where(
+      and(eq(account_note_default.accountId, accountId), eq(account_note_default.userId, userId))
+    ).get();
+    return row ? { content: row.content, updateTime: row.updateTime } : { content: "", updateTime: null };
+  },
+  // 保存（upsert）；content 为空字符串视为清除笔记
+  async save(c3, params, userId) {
+    const accountId = Number(params?.accountId);
+    const content = String(params?.content ?? "");
+    if (!accountId) throw new biz_error_default("\u53C2\u6570\u9519\u8BEF");
+    if (content.length > MAX_LEN) throw new biz_error_default(`\u7B14\u8BB0\u5185\u5BB9\u6700\u591A ${MAX_LEN} \u5B57`);
+    await ensureTable(c3);
+    await this.checkAccount(c3, accountId, userId);
+    const exist = await orm(c3).select().from(account_note_default).where(
+      and(eq(account_note_default.accountId, accountId), eq(account_note_default.userId, userId))
+    ).get();
+    if (exist) {
+      await orm(c3).update(account_note_default).set({ content, updateTime: (/* @__PURE__ */ new Date()).toISOString() }).where(eq(account_note_default.noteId, exist.noteId)).run();
+    } else {
+      await orm(c3).insert(account_note_default).values({ accountId, userId, content }).run();
+    }
+    return null;
+  },
+  async remove(c3, accountId, userId) {
+    await ensureTable(c3);
+    await this.checkAccount(c3, accountId, userId);
+    await orm(c3).delete(account_note_default).where(
+      and(eq(account_note_default.accountId, accountId), eq(account_note_default.userId, userId))
+    ).run();
+    return null;
+  },
+  // 归属校验：邮箱必须属于当前登录用户，别人的邮箱读不到也写不进
+  async checkAccount(c3, accountId, userId) {
+    const row = await orm(c3).select().from(account_default).where(eq(account_default.accountId, accountId)).get();
+    if (!row || row.userId !== userId) throw new biz_error_default("\u65E0\u6743\u64CD\u4F5C\u8BE5\u90AE\u7BB1");
+  }
+};
+var note_service_default = noteService;
+
+// src/api/note-api.js
+hono_default.get("/note/get", async (c3) => {
+  const accountId = c3.req.query("accountId");
+  const data = await note_service_default.get(c3, Number(accountId), user_context_default.getUserId(c3));
+  return c3.json(result_default.ok(data));
+});
+hono_default.put("/note/save", async (c3) => {
+  await note_service_default.save(c3, await c3.req.json(), user_context_default.getUserId(c3));
+  return c3.json(result_default.ok());
+});
+hono_default.delete("/note/delete", async (c3) => {
+  await note_service_default.remove(c3, Number(c3.req.query("accountId")), user_context_default.getUserId(c3));
+  return c3.json(result_default.ok());
+});
+
 // src/api/role-api.js
 hono_default.post("/role/add", async (c3) => {
   await role_service_default.add(c3, await c3.req.json(), user_context_default.getUserId(c3));
@@ -71869,8 +71961,26 @@ var dbInit = {
     await this.v3_3DB(c3);
     await this.v3_4DB(c3);
     await this.v3_5DB(c3);
+    await this.v3_6DB(c3);
     await setting_service_default.refresh(c3);
     return c3.text("success");
+  },
+  // v0.7.7: 邮箱记事本 — 每个邮箱可挂一条笔记（按 user_id 隔离）
+  async v3_6DB(c3) {
+    try {
+      await c3.env.db.prepare(`
+				CREATE TABLE IF NOT EXISTS account_note (
+					note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					account_id INTEGER NOT NULL,
+					user_id INTEGER NOT NULL,
+					content TEXT NOT NULL DEFAULT '',
+					update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)
+			`).run();
+      await c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_note_uk ON account_note(account_id, user_id)`).run();
+    } catch (e3) {
+      console.warn(`\u8DF3\u8FC7\u8868\uFF1A${e3.message}`);
+    }
   },
   async v3_4DB(c3) {
     try {
