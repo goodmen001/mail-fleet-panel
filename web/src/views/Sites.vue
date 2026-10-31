@@ -41,6 +41,9 @@
             <!-- v0.7.7: open the auto-login embed URL in an external browser tab
                  instead of (or besides) the in-panel iframe console -->
             <el-button size="small" @click="openExternal(row)">外部打开</el-button>
+            <!-- v0.7.9: direct jump to the site URL in the user's browser — no
+                 auto-login roundtrip, fastest option on configured machines -->
+            <el-button size="small" @click="openNewTab(row)">直达站点</el-button>
             <el-button size="small" @click="copyCred(row)" v-if="isAdmin">复制密码</el-button>
             <el-button size="small" @click="check(row)">体检</el-button>
             <el-button size="small" type="primary" plain @click="editSite(row)" v-if="isAdmin">修改</el-button>

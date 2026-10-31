@@ -176,9 +176,14 @@
                 <div v-if="!row.steps.length">暂无日志</div>
               </div>
             </el-popover>
+            <el-button size="small" link type="danger" @click="delRecord(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
+      <div style="margin-top:8px">
+        <el-button size="small" @click="clearRecords">清空已结束记录</el-button>
+        <span class="tip-txt" style="margin-left:8px">进行中的任务不可删除；30 天前的记录会在打开页面时自动清理</span>
+      </div>
     </div>
 
     <el-dialog v-model="credShow" :title="editingCred ? '编辑 Cloudflare 凭证' : '添加 Cloudflare 凭证'" width="480">
@@ -214,6 +219,21 @@ import axios from 'axios'
 
 const creds = ref([])
 const records = ref([])
+
+// v0.7.9: delete one finished record / clear all finished records
+async function delRecord(row) {
+  if (row.status === 'running') return ElMessage.warning('进行中的任务不能删除')
+  await ElMessageBox.confirm(`删除「${row.domain}」的部署记录？`, '提示', { type: 'warning' })
+  await axios.delete('/deploy/records', { params: { deployId: row.deploy_id } })
+  records.value = records.value.filter(r => r.deploy_id !== row.deploy_id)
+  ElMessage.success('已删除')
+}
+async function clearRecords() {
+  await ElMessageBox.confirm('清空所有已结束（成功/失败）的部署记录？', '提示', { type: 'warning' })
+  await axios.delete('/deploy/records', { params: { all: 1 } })
+  records.value = records.value.filter(r => r.status === 'running')
+  ElMessage.success('已清空')
+}
 const credShow = ref(false)
 const editingCred = ref(null)
 const deploying = ref(false)

@@ -282,10 +282,35 @@ export default async function (app) {
 
   // records: admins see all, users only their own
   app.get('/records', { preHandler: [app.auth] }, async (req) => {
+    // housekeeping: drop records older than 30 days
+    db.prepare("DELETE FROM deploy_record WHERE create_time < datetime('now','-30 days')").run();
     const rows = req.user.role === 'admin'
       ? db.prepare('SELECT * FROM deploy_record ORDER BY deploy_id DESC LIMIT 200').all()
       : db.prepare('SELECT * FROM deploy_record WHERE owner_id = ? ORDER BY deploy_id DESC LIMIT 200').all(req.user.uid);
     const list = rows.map(r => ({ ...r, steps: JSON.parse(r.steps || '[]') }));
     return { code: 200, data: list };
+  });
+
+  // v0.7.9: delete finished records — one by id, or all finished; running jobs protected
+  app.delete('/records', { preHandler: [app.auth] }, async (req) => {
+    const owner = req.user.role === 'admin' ? null : req.user.uid;
+    const running = owner == null
+      ? db.prepare("SELECT COUNT(*) n FROM deploy_record WHERE status = 'running'").get().n
+      : db.prepare("SELECT COUNT(*) n FROM deploy_record WHERE status = 'running' AND owner_id = ?").get(owner).n;
+    if (running) return { code: 400, message: '有任务正在进行中，稍后再试' };
+    if (req.query.deployId) {
+      const row = db.prepare('SELECT * FROM deploy_record WHERE deploy_id = ?').get(Number(req.query.deployId));
+      if (!row || (owner != null && row.owner_id !== owner)) return { code: 404, message: '记录不存在' };
+      if (row.status === 'running') return { code: 400, message: '进行中的任务不能删除' };
+      db.prepare('DELETE FROM deploy_record WHERE deploy_id = ?').run(row.deploy_id);
+      return { code: 200, message: '已删除' };
+    }
+    if (req.query.all) {
+      const info = owner == null
+        ? db.prepare("DELETE FROM deploy_record WHERE status != 'running'").run()
+        : db.prepare("DELETE FROM deploy_record WHERE status != 'running' AND owner_id = ?").run(owner);
+      return { code: 200, message: `已清空 ${info.changes} 条` };
+    }
+    return { code: 400, message: '参数错误' };
   });
 }
