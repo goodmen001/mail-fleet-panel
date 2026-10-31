@@ -38,6 +38,9 @@
             <el-badge :value="unread[row.site_id]" :max="99" :hidden="!unread[row.site_id]" class="unread-badge">
               <el-button size="small" type="primary" @click="openConsole(row)">控制台</el-button>
             </el-badge>
+            <!-- v0.7.7: open the auto-login embed URL in an external browser tab
+                 instead of (or besides) the in-panel iframe console -->
+            <el-button size="small" @click="openExternal(row)">外部打开</el-button>
             <el-button size="small" @click="copyCred(row)" v-if="isAdmin">复制密码</el-button>
             <el-button size="small" @click="check(row)">体检</el-button>
             <el-button size="small" type="primary" plain @click="editSite(row)" v-if="isAdmin">修改</el-button>
@@ -222,6 +225,18 @@ async function openConsole(row) {
     ElMessage.success(`已加载 ${row.name} 控制台（自动登录）`)
   } catch (e) {
     ElMessage.error(e.response?.data?.message || '打开控制台失败')
+  }
+}
+
+// v0.7.7: open the auto-login console in an external browser tab — the embed
+// key is freshly issued per click, so the new tab opens straight into the
+// logged-in console (no password prompt), same as the in-panel iframe
+async function openExternal(row) {
+  try {
+    const { data } = await axios.post(`/site/console/prepare/${row.site_id}`)
+    window.open(`/api/site/console/embed/${row.site_id}?key=${encodeURIComponent(data.data.key)}`, '_blank')
+  } catch (e) {
+    ElMessage.error(e.response?.data?.message || '打开失败')
   }
 }
 
