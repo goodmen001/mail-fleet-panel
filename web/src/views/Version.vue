@@ -94,9 +94,13 @@
         :title="isAdmin
           ? '面板服务器走 v2ray/clash 等本地代理或公司 HTTP 代理时填写，例如 socks5://127.0.0.1:1080 或 http://user:pass@host:port。对所有 Cloudflare / GitHub API 请求生效。'
           : '代理是可选的：只有在无法连接 Cloudflare 时才需要。配置后退出登录会自动取消该代理（可在历史代理中找回），避免影响其他用户。'"/>
-      <el-alert v-if="outProxy.exists && !outProxy.mine" type="warning" show-icon :closable="false" style="margin-bottom:12px"
+      <!-- unowned = pre-v0.7.4 legacy proxy with no owner record; the admin
+           may take it over or clear it (server marks it admin-mine) -->
+      <el-alert v-if="outProxy.exists && !outProxy.mine && !outProxy.unowned" type="warning" show-icon :closable="false" style="margin-bottom:12px"
         title="当前已有其他用户配置了出站代理（地址保密）。线路不可用时请让该用户调整，或联系管理员。"/>
-      <el-form label-width="100px" style="max-width:640px" v-if="!outProxy.exists || outProxy.mine">
+      <el-alert v-if="outProxy.unowned && isAdmin" type="warning" show-icon :closable="false" style="margin-bottom:12px"
+        title="当前代理是旧版本配置的（无归属记录）。你可以直接覆盖保存，或清空保存以停用。"/>
+      <el-form label-width="100px" style="max-width:640px" v-if="!outProxy.exists || outProxy.mine || (outProxy.unowned && isAdmin)">
         <el-form-item label="代理地址">
           <el-input v-model="outProxy.url" placeholder="留空 = 不使用（直连）" style="max-width:420px"/>
         </el-form-item>
@@ -506,7 +510,7 @@ async function deployOnlycf() {
 }
 
 // ---- outbound proxy (socks5/http) — v0.7.4 per-user isolation ----
-const outProxy = ref({ url: '', saving: false, testing: false, result: null, mine: false, exists: false, history: [] })
+const outProxy = ref({ url: '', saving: false, testing: false, result: null, mine: false, exists: false, unowned: false, history: [] })
 
 async function loadOutProxy() {
   try {
@@ -514,6 +518,7 @@ async function loadOutProxy() {
     outProxy.value.url = data.data?.url || ''
     outProxy.value.mine = !!data.data?.mine
     outProxy.value.exists = !!data.data?.exists
+    outProxy.value.unowned = !!data.data?.unowned
     outProxy.value.history = data.data?.history || []
   } catch { /* older server build */ }
 }

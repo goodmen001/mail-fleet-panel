@@ -190,7 +190,12 @@ export default async function (app) {
   // line works without revealing the address)
   app.get('/outproxy', { preHandler: [app.auth] }, async (req) => {
     const url = getConfiguredProxyUrl();
-    const mine = url && getOutProxyOwner() === req.user.uid;
+    const owner = getOutProxyOwner();
+    // v0.7.6: a proxy left over from before v0.7.4 has no owner (null) —
+    // report it as "unowned" so the admin sees the form and can take it over
+    // or clear it; normal users keep seeing the confidential-exists warning
+    const unowned = !!url && owner === null;
+    const mine = (url && owner === req.user.uid) || (unowned && req.user.role === 'admin');
     return {
       code: 200,
       data: {
@@ -198,6 +203,7 @@ export default async function (app) {
         mode: outProxyMode(),
         mine: !!mine,
         exists: !!url,
+        unowned,
         // own history entries only — other users' are never exposed
         history: getOutProxyHistory(req.user.uid)
       }
@@ -207,7 +213,13 @@ export default async function (app) {
   app.post('/outproxy', { preHandler: [app.auth] }, async (req, reply) => {
     try {
       const url = (req.body || {}).url;
-      if (url && url.trim() && getConfiguredProxyUrl() && getOutProxyOwner() !== req.user.uid) {
+      // v0.7.6 migration fix: proxies configured before v0.7.4 have no owner
+      // record (owner=null) — nobody was "mine", so even admins could neither
+      // see the form nor clear the stale proxy. An unowned proxy is treated as
+      // admin-takeable; a proxy owned by another (normal) user stays 403.
+      const owner = getOutProxyOwner();
+      if (url && url.trim() && getConfiguredProxyUrl()
+          && owner !== null && owner !== req.user.uid) {
         return reply.code(403).send({ code: 403, message: '已有其他用户配置了出站代理，无法覆盖' });
       }
       setOutProxyUrl(url);
