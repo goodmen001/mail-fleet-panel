@@ -1,6 +1,6 @@
 {
   "name": "mail-fleet-panel-server",
-  "version": "1.0.0",
+  "version": "0.7.9",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
