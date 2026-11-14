@@ -35845,6 +35845,8 @@ var constant = {
   JWT_UID: "user_id:",
   JWT_TOKEN: "token:",
   TOKEN_EXPIRE: 60 * 60 * 24 * 30,
+  // Bump this number to invalidate every existing login token.
+  AUTH_GEN: 1,
   ATTACHMENT_PREFIX: "attachments/",
   BACKGROUND_PREFIX: "static/background/",
   ADMIN_ROLE: {
@@ -49766,6 +49768,7 @@ var emailBriefColumns = {
   subject: email_default.subject,
   code: email_default.code,
   recipient: email_default.recipient,
+  cc: email_default.cc,
   toEmail: email_default.toEmail,
   type: email_default.type,
   status: email_default.status,
@@ -66542,6 +66545,7 @@ var zh = {
   imageAttLimit: "\u56FE\u7247\u4E0D\u80FD\u8D85\u8FC710\u4E2A",
   attLimit: "\u9644\u4EF6\u4E0D\u80FD\u8D85\u8FC710\u4E2A",
   resendRecipientLimit: "Resend \u5206\u5F00\u53D1\u9001\u6700\u591A\u652F\u6301100\u4F4D\u6536\u4EF6\u4EBA",
+  recipientLimit: "\u6536\u4EF6\u4EBA\u3001\u6284\u9001\u548C\u5BC6\u9001\u5408\u8BA1\u4E0D\u80FD\u8D85\u8FC750\u4E2A",
   resendSeparateAttachments: "Resend \u5206\u5F00\u53D1\u9001\u4E0D\u80FD\u643A\u5E26\u9644\u4EF6",
   pwdLengthLimit: "\u5BC6\u7801\u957F\u5EA6\u8D85\u51FA\u9650\u5236",
   emailLengthLimit: "\u90AE\u7BB1\u957F\u5EA6\u8D85\u51FA\u9650\u5236",
@@ -66669,6 +66673,7 @@ var en = {
   imageAttLimit: "The maximum number of image attachments is 10",
   attLimit: "The maximum number of attachments is 10.",
   resendRecipientLimit: "Resend separate sending supports at most 100 recipients",
+  recipientLimit: "To, CC, and BCC together cannot exceed 50 recipients",
   resendSeparateAttachments: "Resend separate sending does not support attachments",
   pwdLengthLimit: "Password length exceeds the limit",
   emailLengthLimit: "Email length exceeds the limit",
@@ -69108,6 +69113,15 @@ function encodeMimeWord(value = "") {
   return `=?UTF-8?B?${btoa(binary)}?=`;
 }
 __name(encodeMimeWord, "encodeMimeWord");
+function formatAddressList(list) {
+  return (list || []).map((item) => {
+    if (typeof item === "string") {
+      return item;
+    }
+    return formatMailbox(item.address || item.email, item.name);
+  }).filter(Boolean);
+}
+__name(formatAddressList, "formatAddressList");
 function formatMailbox(address, name2) {
   if (!address) {
     return "";
@@ -69154,15 +69168,12 @@ __name(filenameParam, "filenameParam");
 var forwardMime = {
   // 信头 To 用 params.receiveEmail，调用方把已验证地址作为信封收件人传入。
   build(params) {
-    const recipients = (params.receiveEmail || []).map((item) => {
-      if (typeof item === "string") {
-        return item;
-      }
-      return formatMailbox(item.address || item.email, item.name);
-    }).filter(Boolean);
+    const recipients = formatAddressList(params.receiveEmail);
+    const cc2 = formatAddressList(params.ccEmail);
     const headers = [
       `From: ${formatMailbox(params.accountEmail, params.name)}`,
       `To: ${recipients.join(", ")}`,
+      ...cc2.length > 0 ? [`Cc: ${cc2.join(", ")}`] : [],
       `Subject: ${encodeMimeWord(params.subject || "")}`,
       "MIME-Version: 1.0"
     ];
@@ -69346,6 +69357,24 @@ var emailService = {
     }
     return list;
   },
+  // 时间范围先通过窄索引筛出 ID，避免逐行读取大字段之后的 create_time。
+  createTimeCondition({ startDate, endDate, userId }) {
+    if (!startDate && !endDate) return null;
+    const parts = [];
+    if (userId) parts.push(sql`e.user_id = ${userId}`);
+    if (startDate) parts.push(sql`e.create_time >= ${startDate}`);
+    if (endDate) parts.push(sql`e.create_time <= ${endDate}`);
+    return sql`${email_default.emailId} IN (SELECT e.email_id FROM email AS e WHERE ${sql.join(parts, sql` AND `)})`;
+  },
+  // 两个地址分别扫描各自的索引；UNION 去重，避免同时命中时重复计数。
+  // 显式指定索引，避免 D1 为 UNION 合并排序而改用表扫描。
+  emailAddressCondition(pattern) {
+    return sql`${email_default.emailId} IN (
+			SELECT e.email_id FROM email AS e INDEXED BY idx_email_to_email_nocase WHERE e.to_email COLLATE NOCASE LIKE ${pattern}
+			UNION
+			SELECT e.email_id FROM email AS e INDEXED BY idx_email_send_email_nocase WHERE e.send_email COLLATE NOCASE LIKE ${pattern}
+		)`;
+  },
   emailListFilters({
     userId,
     accountId,
@@ -69394,15 +69423,11 @@ var emailService = {
         conditions.push(sql`${email_default.toEmail} COLLATE NOCASE LIKE ${searchText}`);
       }
     }
-    if (startDate) {
-      conditions.push(gte(email_default.createTime, startDate));
-    }
-    if (endDate) {
-      conditions.push(lte(email_default.createTime, endDate));
-    }
+    const timeCond = this.createTimeCondition({ startDate, endDate, userId });
+    if (timeCond) conditions.push(timeCond);
     return conditions;
   },
-  allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, withCursor = true }) {
+  allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, withCursor = true, text: text2, searchType, startDate, endDate }) {
     const conditions = [];
     if (type === "send") {
       conditions.push(eq(email_default.type, emailConst.type.SEND));
@@ -69420,12 +69445,7 @@ var emailService = {
       conditions.push(sql`${user_default.email} COLLATE NOCASE LIKE ${userEmail + "%"}`);
     }
     if (accountEmail) {
-      conditions.push(
-        or(
-          sql`${email_default.toEmail} COLLATE NOCASE LIKE ${accountEmail + "%"}`,
-          sql`${email_default.sendEmail} COLLATE NOCASE LIKE ${accountEmail + "%"}`
-        )
-      );
+      conditions.push(this.emailAddressCondition(accountEmail + "%"));
     }
     if (name2) {
       conditions.push(sql`${email_default.name} COLLATE NOCASE LIKE ${name2 + "%"}`);
@@ -69433,6 +69453,26 @@ var emailService = {
     if (subject) {
       conditions.push(sql`${email_default.subject} COLLATE NOCASE LIKE ${subject + "%"}`);
     }
+    if (text2?.trim() && searchType) {
+      const searchText = `%${text2.trim()}%`;
+      if (searchType === "subject") {
+        conditions.push(sql`${email_default.subject} COLLATE NOCASE LIKE ${searchText}`);
+      }
+      if (searchType === "sender") {
+        conditions.push(sql`${email_default.name} COLLATE NOCASE LIKE ${searchText}`);
+      }
+      if (searchType === "senderAddress") {
+        conditions.push(sql`${email_default.sendEmail} COLLATE NOCASE LIKE ${searchText}`);
+      }
+      if (searchType === "user") {
+        conditions.push(sql`${user_default.email} COLLATE NOCASE LIKE ${searchText}`);
+      }
+      if (searchType === "account") {
+        conditions.push(this.emailAddressCondition(searchText));
+      }
+    }
+    const timeCond = this.createTimeCondition({ startDate, endDate });
+    if (timeCond) conditions.push(timeCond);
     if (withCursor && emailId) {
       conditions.push(timeSort ? gt(email_default.emailId, emailId) : lt(email_default.emailId, emailId));
     }
@@ -69468,6 +69508,30 @@ var emailService = {
   touchAccountLatestEmail(c3, accountId) {
     orm(c3).update(account_default).set({ latestEmailTime: (/* @__PURE__ */ new Date()).toISOString() }).where(eq(account_default.accountId, accountId)).run();
   },
+  normalizeAddressList(value) {
+    if (value == null || value === "") {
+      return [];
+    }
+    const list = Array.isArray(value) ? value : [value];
+    const result2 = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const item of list) {
+      const address = String(item ?? "").trim();
+      if (!address) {
+        continue;
+      }
+      if (!verify_utils_default.isEmail(address)) {
+        throw new biz_error_default(t3("notEmail"));
+      }
+      const key2 = address.toLowerCase();
+      if (seen.has(key2)) {
+        continue;
+      }
+      seen.add(key2);
+      result2.push(address);
+    }
+    return result2;
+  },
   // 发送入口：公共校验、参数准备、渠道选择和结果汇总。
   async send(c3, params, userId) {
     let {
@@ -69481,6 +69545,10 @@ var emailService = {
       //邮件id，如果是回复邮件会带
       receiveEmail,
       //收件人邮箱
+      ccEmail,
+      //抄送
+      bccEmail,
+      //密送
       text: text2,
       //邮件纯文本
       content,
@@ -69490,6 +69558,12 @@ var emailService = {
       attachments = []
       //附件
     } = params;
+    ccEmail = this.normalizeAddressList(ccEmail);
+    bccEmail = this.normalizeAddressList(bccEmail);
+    const takenAddress = new Set((receiveEmail || []).map((item) => String(item).toLowerCase()));
+    ccEmail = ccEmail.filter((address) => !takenAddress.has(address.toLowerCase()));
+    ccEmail.forEach((address) => takenAddress.add(address.toLowerCase()));
+    bccEmail = bccEmail.filter((address) => !takenAddress.has(address.toLowerCase()));
     const { resendTokens, r2Domain, send, domainList } = await setting_service_default.query(c3);
     let { imageDataList, html } = await att_service_default.toImageUrlHtml(c3, content);
     if (send === settingConst.send.CLOSE) {
@@ -69497,7 +69571,14 @@ var emailService = {
     }
     const userRow = await user_service_default.selectById(c3, userId);
     const roleRow = await role_service_default.selectById(c3, userRow.type);
-    const allInternal = receiveEmail.every((email4) => {
+    const separate = params.manyType === "divide";
+    if (separate) {
+      ccEmail = [];
+      bccEmail = [];
+    }
+    const copyCount = ccEmail.length + bccEmail.length;
+    const quotaCount = receiveEmail.length + copyCount;
+    const allInternal = [...receiveEmail, ...ccEmail, ...bccEmail].every((email4) => {
       const domain2 = "@" + email_utils_default.getDomain(email4);
       return domainList.includes(domain2);
     });
@@ -69514,7 +69595,7 @@ var emailService = {
         if (roleRow.sendType === "day") throw new biz_error_default(t3("daySendLimit"), 403);
         if (roleRow.sendType === "count") throw new biz_error_default(t3("totalSendLimit"), 403);
       }
-      if (userRow.sendCount + receiveEmail.length > roleRow.sendCount) {
+      if (userRow.sendCount + quotaCount > roleRow.sendCount) {
         if (roleRow.sendType === "day") throw new biz_error_default(t3("daySendLack"), 403);
         if (roleRow.sendType === "count") throw new biz_error_default(t3("totalSendLack"), 403);
       }
@@ -69553,6 +69634,8 @@ var emailService = {
       name: name2,
       accountEmail: accountRow.email,
       receiveEmail,
+      ccEmail,
+      bccEmail,
       subject,
       text: text2,
       html,
@@ -69566,7 +69649,12 @@ var emailService = {
     if (attachments.length > 10) {
       throw new biz_error_default(t3("attLimit"));
     }
-    const separate = params.manyType === "divide";
+    if (!allInternal) {
+      const perMessageCount = (separate ? 1 : receiveEmail.length) + copyCount;
+      if (perMessageCount > 50) {
+        throw new biz_error_default(t3("recipientLimit"));
+      }
+    }
     const context = {
       separate,
       allInternal,
@@ -69581,6 +69669,8 @@ var emailService = {
         text: text2,
         html,
         sendEmail: accountRow.email,
+        ccEmail,
+        bccEmail,
         messageId: emailRow.messageId,
         sendType,
         useCloudflareEmail,
@@ -69625,7 +69715,8 @@ var emailService = {
     const recipientGroups = separate ? sendParams.receiveEmail.map((address) => [address]) : [sendParams.receiveEmail];
     for (const receiveEmail of recipientGroups) {
       const emailResult = await this.saveSentEmail(c3, { ...saveParams, receiveEmail });
-      const emailRowList = await this.HandleOnSiteEmail(c3, receiveEmail, emailResult, emailResult.attList);
+      const inboxAddresses = [...receiveEmail, ...sendParams.ccEmail, ...sendParams.bccEmail];
+      const emailRowList = await this.HandleOnSiteEmail(c3, inboxAddresses, emailResult, emailResult.attList);
       await this.forwardOnSiteEmail(c3, emailRowList, { sendParams: { ...sendParams, receiveEmail } });
       yield { emails: [emailResult] };
     }
@@ -69695,6 +69786,8 @@ var emailService = {
       html,
       sendEmail,
       receiveEmail,
+      ccEmail = [],
+      bccEmail = [],
       providerId,
       messageId,
       sendType,
@@ -69718,14 +69811,17 @@ var emailService = {
       status: useCloudflareEmail ? emailConst.status.DELIVERED : emailConst.status.SENT,
       type: emailConst.type.SEND,
       resendEmailId: providerId,
-      recipient: JSON.stringify(receiveEmail.map((address) => ({ address, name: "" })))
+      recipient: JSON.stringify(receiveEmail.map((address) => ({ address, name: "" }))),
+      cc: JSON.stringify(ccEmail.map((address) => ({ address, name: "" }))),
+      bcc: JSON.stringify(bccEmail.map((address) => ({ address, name: "" })))
     };
     if (sendType === "reply") {
       emailData.inReplyTo = messageId;
       emailData.relation = messageId;
     }
+    const deliveredCount = receiveEmail.length + ccEmail.length + bccEmail.length;
     if (roleRow.sendCount && roleRow.sendType !== "internal") {
-      await user_service_default.incrUserSendCount(c3, receiveEmail.length, userId);
+      await user_service_default.incrUserSendCount(c3, deliveredCount, userId);
     }
     const emailResult = await orm(c3).insert(email_default).values(emailData).returning().get();
     if (imageDataList.length > 0) {
@@ -69739,9 +69835,9 @@ var emailService = {
     const dateStr = (0, import_dayjs3.default)().format("YYYY-MM-DD");
     let daySendTotal = await c3.env.kv.get(kv_const_default.SEND_DAY_COUNT + dateStr);
     if (!daySendTotal) {
-      await c3.env.kv.put(kv_const_default.SEND_DAY_COUNT + dateStr, JSON.stringify(receiveEmail.length), { expirationTtl: 60 * 60 * 24 });
+      await c3.env.kv.put(kv_const_default.SEND_DAY_COUNT + dateStr, JSON.stringify(deliveredCount), { expirationTtl: 60 * 60 * 24 });
     } else {
-      daySendTotal = Number(daySendTotal) + receiveEmail.length;
+      daySendTotal = Number(daySendTotal) + deliveredCount;
       await c3.env.kv.put(kv_const_default.SEND_DAY_COUNT + dateStr, JSON.stringify(daySendTotal), { expirationTtl: 60 * 60 * 24 });
     }
     return emailResult;
@@ -69763,7 +69859,9 @@ var emailService = {
     }
     return resend.batch.send(params.receiveEmail.map((address) => ({
       ...sendForm,
-      to: [address]
+      to: [address],
+      ...params.ccEmail.length > 0 ? { cc: params.ccEmail } : {},
+      ...params.bccEmail.length > 0 ? { bcc: params.bccEmail } : {}
     })), { batchValidation: "strict" });
   },
   async sendByCloudflareEmail(c3, params) {
@@ -69772,6 +69870,12 @@ var emailService = {
       to: [...params.receiveEmail],
       subject: params.subject
     };
+    if (params.ccEmail.length > 0) {
+      sendForm.cc = [...params.ccEmail];
+    }
+    if (params.bccEmail.length > 0) {
+      sendForm.bcc = [...params.bccEmail];
+    }
     if (params.text) {
       sendForm.text = params.text;
     }
@@ -69805,6 +69909,12 @@ var emailService = {
       html: params.html,
       attachments: await this.toResendAttachments(params.attachments)
     };
+    if (params.ccEmail.length > 0) {
+      sendForm.cc = [...params.ccEmail];
+    }
+    if (params.bccEmail.length > 0) {
+      sendForm.bcc = [...params.bccEmail];
+    }
     if (params.sendType === "reply") {
       sendForm.headers = {
         "in-reply-to": params.messageId,
@@ -69920,6 +70030,7 @@ var emailService = {
     const emailDataList = [];
     for (const email4 of receiveEmail) {
       const emailValues = { ...sendEmailData };
+      emailValues.bcc = "[]";
       emailValues.status = emailConst.status.RECEIVE;
       emailValues.type = emailConst.type.RECEIVE;
       emailValues.toEmail = email4;
@@ -70111,7 +70222,7 @@ var emailService = {
     return result2;
   },
   async allList(c3, params) {
-    let { emailId, size, name: name2, subject, accountEmail, userEmail, type, timeSort, full } = params;
+    let { emailId, size, name: name2, subject, accountEmail, userEmail, type, timeSort, full, text: text2, searchType, startDate, endDate } = params;
     size = Number(size);
     emailId = Number(emailId) || 0;
     timeSort = Number(timeSort);
@@ -70129,11 +70240,16 @@ var emailService = {
       full = 1;
     }
     full = full === 1;
-    const filters2 = this.allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort });
-    const countFilters = this.allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, withCursor: false });
+    const filters2 = this.allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, text: text2, searchType, startDate, endDate });
+    const countFilters = this.allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, text: text2, searchType, startDate, endDate, withCursor: false });
+    const searchUser = Boolean(text2?.trim() && searchType === "user");
     const columns = full ? emailListColumns : emailBriefColumns;
-    const query2 = orm(c3).select({ ...columns, userEmail: user_default.email }).from(email_default).leftJoin(user_default, eq(email_default.userId, user_default.userId)).where(and(...filters2));
-    const queryCount = userEmail ? orm(c3).select({ total: count() }).from(email_default).leftJoin(user_default, eq(email_default.userId, user_default.userId)).where(and(...countFilters)) : orm(c3).select({ total: count() }).from(email_default).where(and(...countFilters));
+    const listWhere = and(...filters2);
+    const countWhere = and(...countFilters);
+    const query2 = orm(c3).select({ ...columns, userEmail: user_default.email }).from(email_default).leftJoin(user_default, eq(email_default.userId, user_default.userId));
+    if (listWhere) query2.where(listWhere);
+    const queryCount = userEmail || searchUser ? orm(c3).select({ total: count() }).from(email_default).leftJoin(user_default, eq(email_default.userId, user_default.userId)) : orm(c3).select({ total: count() }).from(email_default);
+    if (countWhere) queryCount.where(countWhere);
     if (timeSort) {
       query2.orderBy(asc(email_default.emailId));
     } else {
@@ -70854,7 +70970,7 @@ var loginService = {
       throw new biz_error_default(t3("IncorrectPwd"));
     }
     const uuid = v4_default2();
-    const jwt = await jwt_utils_default.generateToken(c3, { userId: userRow.userId, token: uuid });
+    const jwt = await jwt_utils_default.generateToken(c3, { userId: userRow.userId, token: uuid, gen: constant_default.AUTH_GEN });
     let authInfo = await c3.env.kv.get(kv_const_default.AUTH_INFO + userRow.userId, { type: "json" });
     if (authInfo && authInfo.user.email === userRow.email) {
       if (authInfo.tokens.length > 10) {
@@ -71411,7 +71527,7 @@ hono_default.use("*", async (c3, next) => {
   }
   const jwt = c3.req.header(constant_default.TOKEN_HEADER);
   const result2 = await jwt_utils_default.verifyToken(c3, jwt);
-  if (!result2) {
+  if (!result2 || result2.gen !== constant_default.AUTH_GEN) {
     throw new biz_error_default(t3("authExpired"), 401);
   }
   const { userId, token: token2 } = result2;
@@ -71961,12 +72077,34 @@ var dbInit = {
     await this.v3_3DB(c3);
     await this.v3_4DB(c3);
     await this.v3_5DB(c3);
-    await this.v3_6DB(c3);
     await setting_service_default.refresh(c3);
     return c3.text("success");
   },
-  // v0.7.7: 邮箱记事本 — 每个邮箱可挂一条笔记（按 user_id 隔离）
-  async v3_6DB(c3) {
+  // 本地定制（v0.7.5 分组 + v0.7.7 记事本 + 上游 v3.5.0 搜索索引）
+  async v3_5DB(c3) {
+    try {
+      await c3.env.db.prepare(`
+				CREATE TABLE IF NOT EXISTS account_group (
+					group_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					name TEXT NOT NULL,
+					sort INTEGER NOT NULL DEFAULT 0,
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+					user_id INTEGER NOT NULL
+				)
+			`).run();
+    } catch (e3) {
+      console.warn(`\u8DF3\u8FC7\u8868\uFF1A${e3.message}`);
+    }
+    try {
+      await c3.env.db.prepare(`ALTER TABLE account ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0;`).run();
+    } catch (e3) {
+      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+    }
+    try {
+      await c3.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_email_user_create_time ON email(user_id, create_time)`).run();
+    } catch (e3) {
+      console.warn(`\u8DF3\u8FC7\u7D22\u5F15\uFF1A${e3.message}`);
+    }
     try {
       await c3.env.db.prepare(`
 				CREATE TABLE IF NOT EXISTS account_note (
@@ -71985,26 +72123,6 @@ var dbInit = {
   async v3_4DB(c3) {
     try {
       await c3.env.db.prepare(`ALTER TABLE email ADD COLUMN sender_email TEXT NOT NULL DEFAULT '';`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
-    }
-  },
-  async v3_5DB(c3) {
-    try {
-      await c3.env.db.prepare(`
-				CREATE TABLE IF NOT EXISTS account_group (
-					group_id INTEGER PRIMARY KEY AUTOINCREMENT,
-					name TEXT NOT NULL,
-					sort INTEGER NOT NULL DEFAULT 0,
-					create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-					user_id INTEGER NOT NULL
-				)
-			`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u8868\uFF1A${e3.message}`);
-    }
-    try {
-      await c3.env.db.prepare(`ALTER TABLE account ADD COLUMN group_id INTEGER NOT NULL DEFAULT 0;`).run();
     } catch (e3) {
       console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
     }
