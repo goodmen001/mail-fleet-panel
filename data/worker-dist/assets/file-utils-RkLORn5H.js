@@ -1,4 +1,8 @@
+<<<<<<<< HEAD:data/worker-dist/assets/file-utils-RkLORn5H.js
 import{d as v}from"./debounce-DGS4-BII.js";import{bH as U}from"./index-C5J-Yp9l.js";var p="Expected a function";function L(a,t,e){var n=!0,o=!0;if(typeof a!="function")throw new TypeError(p);return U(e)&&(n="leading"in e?!!e.leading:n,o="trailing"in e?!!e.trailing:o),v(a,t,{leading:n,maxWait:t,trailing:o})}/*!
+========
+import{d as v}from"./debounce-3ShqPUI4.js";import{bG as U}from"./index-BODXNJBy.js";var p="Expected a function";function L(a,t,e){var n=!0,o=!0;if(typeof a!="function")throw new TypeError(p);return U(e)&&(n="leading"in e?!!e.leading:n,o="trailing"in e?!!e.trailing:o),v(a,t,{leading:n,maxWait:t,trailing:o})}/*!
+>>>>>>>> ac24ef8 (v0.7.11: 定制包同步上游 v3.6.0（WebSocket 实时推送/登录验证码/自动建管理员/安全修复）+ 记事本定制保留):data/worker-dist/assets/file-utils-BDbrKXOb.js
  * Compressor.js v1.2.1
  * https://fengyuanchen.github.io/compressorjs
  *
