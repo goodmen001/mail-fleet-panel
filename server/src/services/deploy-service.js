@@ -16,15 +16,18 @@ import { cfFetch, cfFormData } from './cf-proxy.js';
 
 const CF_API = (process.env.CF_API_BASE || 'https://api.cloudflare.com') + '/client/v4';
 
-async function cf(headers, method, pathName, body, isForm = false) {
+async function cf(headers, method, pathName, body, isForm = false, { timeoutMs } = {}) {
   const res = await cfFetch(CF_API + pathName, {
     method,
     headers: isForm ? headers : { ...headers, 'Content-Type': 'application/json' },
     body: body ? (isForm ? body : JSON.stringify(body)) : undefined
-  });
+  }, { timeoutMs: timeoutMs || 30000 });
   const text = await res.text();
   let j;
   try { j = JSON.parse(text); } catch {
+    // cfFetch already routes around CF WAF block pages (403 HTML). Reaching
+    // here means the FINAL route answered non-JSON — report the route URL so
+    // the user can tell whether it was the proxy or direct that got blocked.
     throw new Error(`CF API ${pathName}: 响应非 JSON (HTTP ${res.status}): ${text.slice(0, 120)}`);
   }
   if (!j.success) throw new Error(`CF API ${pathName}: ${j.errors?.map(e => e.message).join('; ') || res.status}`);
@@ -67,7 +70,7 @@ const MIME = {
 };
 
 // assets upload session + missing-file upload, shared by deploy & upgrade
-async function uploadAssets(headers, accountId, workerName, workerDistDir, step) {
+export async function uploadAssets(headers, accountId, workerName, workerDistDir, step) {
   step('上传静态资源');
   const manifest = buildAssetManifest(workerDistDir);
   step(`静态资源 ${Object.keys(manifest).length} 个文件`);
@@ -80,19 +83,50 @@ async function uploadAssets(headers, accountId, workerName, workerDistDir, step)
     // hash → path index (case-insensitive compare, CF sometimes normalizes case)
     const byHash = new Map();
     for (const k of Object.keys(manifest)) byHash.set(manifest[k].hash.toLowerCase(), k.slice(1));
-    const form = await cfFormData();
-    for (const entry of missing) {
+    // Upload in BATCHES. All 71 files of a fresh cloud-mail dist are ~10-15MB
+    // base64; through a slow reverse proxy (~3s/MB measured) a single POST
+    // blows past any reasonable timeout, and CF workers assets-upload JWTs are
+    // one-shot per completion anyway — wrangler does the same: it batches
+    // uploads (one request per bucket group) and uses the returned JWT for the
+    // next batch / the final completion.
+    const sizeOf = (entry) => {
       const relPath = byHash.get(String(entry.hash).toLowerCase());
-      if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
-      const buf = fs.readFileSync(path.join(workerDistDir, relPath));
-      form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
+      return relPath ? manifest['/' + relPath].size : 0;
+    };
+    const BATCH_BYTES = 4 * 1024 * 1024; // ≤4MB raw per batch → ≤~5.4MB base64 body
+    const batches = [];
+    let cur = [], curBytes = 0;
+    for (const entry of missing) {
+      const sz = sizeOf(entry);
+      if (cur.length && curBytes + sz > BATCH_BYTES) { batches.push(cur); cur = []; curBytes = 0; }
+      cur.push(entry); curBytes += sz;
     }
-    const up = await cfFetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
-      method: 'POST', headers: { ...headers, Authorization: `Bearer ${session.jwt}` }, body: form
-    });
-    const j = await up.json();
-    if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
-    completionJwt = j.result?.jwt || completionJwt;
+    if (cur.length) batches.push(cur);
+    if (batches.length > 1) step(`分 ${batches.length} 批上传（大请求经反代易超时）`);
+    for (let bi = 0; bi < batches.length; bi++) {
+      const batch = batches[bi];
+      const form = await cfFormData();
+      for (const entry of batch) {
+        const relPath = byHash.get(String(entry.hash).toLowerCase());
+        if (!relPath) throw new Error(`静态资源清单缺少 hash ${entry.hash}（资源目录与清单不一致，请检查 data/worker-dist 完整性）`);
+        const buf = fs.readFileSync(path.join(workerDistDir, relPath));
+        form.append(entry.hash, new Blob([buf.toString('base64')], { type: MIME[path.extname(relPath)] || 'application/octet-stream' }), entry.hash);
+      }
+      step(`上传资源 ${bi + 1}/${batches.length}（${batch.length} 个文件）`);
+      // large body over a possibly slow route — 10 min ceiling instead of the
+      // default 30s (30s killed ~15MB uploads at ~3s/MB upstream speed)
+      const up = await cfFetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
+        method: 'POST', headers: { ...headers, Authorization: `Bearer ${completionJwt}` }, body: form
+      }, { timeoutMs: 10 * 60 * 1000 });
+      let j;
+      try { j = await up.json(); } catch {
+        throw new Error(`静态资源上传失败（第 ${bi + 1}/${batches.length} 批）: 响应非 JSON (HTTP ${up.status})`);
+      }
+      if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
+      // each upload response returns a fresh JWT; the last one completes the
+      // session — keep it for the script PUT
+      completionJwt = j.result?.jwt || completionJwt;
+    }
   }
   return completionJwt;
 }
@@ -102,7 +136,8 @@ async function putWorkerScript(headers, accountId, workerName, workerDistDir, me
   const form = await cfFormData();
   form.append('metadata', JSON.stringify(metadata));
   form.append('worker.js', new File([workerJs], 'worker.js', { type: 'application/javascript+module' }));
-  await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true);
+  // worker.js is ~3MB bundled — same slow-route risk as the asset upload
+  await cf(headers, 'PUT', `/accounts/${accountId}/workers/scripts/${workerName}`, form, true, { timeoutMs: 10 * 60 * 1000 });
 }
 
 export async function deployCloudMail(headers, accountId, domain, adminEmail, onStep, workerDistDir) {
