@@ -50,17 +50,33 @@ function withPrefix(prefix, url) {
   return prefix + url.replace(/^https?:\/\//, '');
 }
 
+// attempt() must surface WHY it failed: callers used to see only the URL, so
+// "直连与代理均失败" gave no clue whether it was the timeout, a refused
+// connection, or TLS reset — unfixable from the user side without that.
+function errInfo(e, timeoutMs) {
+  if (!e) return '未知错误';
+  if (e.name === 'AbortError' || e.name === 'TimeoutError') {
+    return `超时（${Math.round(timeoutMs / 1000)}s 内未完成）`;
+  }
+  const cause = e.cause?.message || e.cause?.code || '';
+  return e.message + (cause && cause !== e.message ? ` (${cause})` : '');
+}
+
 async function attempt(url, init, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     return await undiciFetch(url, { ...init, signal: ctrl.signal, dispatcher: getDispatcher() });
-  } catch {
+  } catch (e) {
+    lastAttemptError = errInfo(e, timeoutMs);
     return null;
   } finally {
     clearTimeout(timer);
   }
 }
+
+// why the most recent attempt() failed — cfFetch folds this into its error
+let lastAttemptError = null;
 
 // multipart bodies for the CF Workers upload API must use undici's own
 // FormData: npm undici's fetch cannot serialize the Node built-in FormData —
@@ -75,6 +91,13 @@ export async function cfFormData() {
 
 // single entry point for every api.cloudflare.com call in the panel.
 // Only https://api.cloudflare.com URLs are routed; other hosts pass through.
+//
+// timeoutMs: callers MAY pass a larger value for large-body calls. The
+// Workers assets upload sends all missing files in ONE multipart POST (can be
+// 10-15MB for cloud-mail's 71-file dist); measured through a CF-Worker reverse
+// proxy that is ~3s/MB, i.e. 40s+ — a plain 30s timeout killed the request
+// mid-flight and deploy reported "无法连接 Cloudflare API" although small
+// calls (token verify, asset-upload-session) succeeded seconds earlier.
 export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
   if (!url.startsWith('https://api.cloudflare.com/')) return undiciFetch(url, init);
   const cfg = getCfConfig();
@@ -87,10 +110,11 @@ export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
   }
   let lastErr = null;
   for (const prefix of targets) {
+    lastAttemptError = null;
     const target = prefix ? withPrefix(prefix, url) : url;
     const res = await attempt(target, init, timeoutMs);
     if (res) return res;
-    lastErr = new Error(`请求失败: ${target}`);
+    lastErr = new Error(`请求失败: ${target}（${lastAttemptError}）`);
   }
   throw new Error(
     `无法连接 Cloudflare API（直连与代理均失败）。可在「版本中心 → Cloudflare 加速代理」配置自建反代地址: ${lastErr?.message || ''}`
