@@ -25,6 +25,9 @@ async function cf(headers, method, pathName, body, isForm = false, { timeoutMs }
   const text = await res.text();
   let j;
   try { j = JSON.parse(text); } catch {
+    // cfFetch already routes around CF WAF block pages (403 HTML). Reaching
+    // here means the FINAL route answered non-JSON — report the route URL so
+    // the user can tell whether it was the proxy or direct that got blocked.
     throw new Error(`CF API ${pathName}: 响应非 JSON (HTTP ${res.status}): ${text.slice(0, 120)}`);
   }
   if (!j.success) throw new Error(`CF API ${pathName}: ${j.errors?.map(e => e.message).join('; ') || res.status}`);
@@ -115,7 +118,10 @@ export async function uploadAssets(headers, accountId, workerName, workerDistDir
       const up = await cfFetch(`${CF_API}/accounts/${accountId}/workers/assets/upload?base64=true`, {
         method: 'POST', headers: { ...headers, Authorization: `Bearer ${completionJwt}` }, body: form
       }, { timeoutMs: 10 * 60 * 1000 });
-      const j = await up.json();
+      let j;
+      try { j = await up.json(); } catch {
+        throw new Error(`静态资源上传失败（第 ${bi + 1}/${batches.length} 批）: 响应非 JSON (HTTP ${up.status})`);
+      }
       if (!j.success) throw new Error('静态资源上传失败: ' + (j.errors?.map(e => e.message).join('; ') || up.status));
       // each upload response returns a fresh JWT; the last one completes the
       // session — keep it for the script PUT

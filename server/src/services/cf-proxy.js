@@ -62,6 +62,24 @@ function errInfo(e, timeoutMs) {
   return e.message + (cause && cause !== e.message ? ` (${cause})` : '');
 }
 
+// Cloudflare WAF sometimes answers the API with an HTML challenge/block page
+// (HTTP 403, "<!doctype html>...Just a moment...") instead of JSON. Treating
+// that as a normal response made deploys die with "响应非 JSON" even though
+// the OTHER route (proxy ⇄ direct) would have succeeded. A block page is a
+// property of the client IP + route, not of the request — so it means "this
+// route is unusable", and cfFetch should fall through to the next target.
+function isBlockPage(res, text) {
+  const ct = (res.headers.get('content-type') || '').toLowerCase();
+  if (ct.includes('text/html')) return true;
+  const head = text.slice(0, 200).trimStart().toLowerCase();
+  return head.startsWith('<!doctype') || head.startsWith('<html');
+}
+
+// a flaky custom proxy (self-hosted Worker reverse proxy) often fails the
+// connection outright for a minority of requests — retry the SAME route a
+// couple of times before giving up and falling to the next target
+const PROXY_RETRIES = 2;
+
 async function attempt(url, init, timeoutMs) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -98,6 +116,12 @@ export async function cfFormData() {
 // proxy that is ~3s/MB, i.e. 40s+ — a plain 30s timeout killed the request
 // mid-flight and deploy reported "无法连接 Cloudflare API" although small
 // calls (token verify, asset-upload-session) succeeded seconds earlier.
+//
+// route selection: a failure here does NOT always mean "try the other route" —
+//   - transport error / timeout          → retry same route, then fall through
+//   - HTML challenge page (CF WAF block) → fall through IMMEDIATELY (the page
+//     is IP+route specific; retrying the same route just returns the same page)
+//   - other HTTP responses (JSON incl. API errors) → valid answer, return it
 export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
   if (!url.startsWith('https://api.cloudflare.com/')) return undiciFetch(url, init);
   const cfg = getCfConfig();
@@ -110,11 +134,31 @@ export async function cfFetch(url, init = {}, { timeoutMs = 30000 } = {}) {
   }
   let lastErr = null;
   for (const prefix of targets) {
-    lastAttemptError = null;
     const target = prefix ? withPrefix(prefix, url) : url;
-    const res = await attempt(target, init, timeoutMs);
-    if (res) return res;
-    lastErr = new Error(`请求失败: ${target}（${lastAttemptError}）`);
+    const tries = prefix ? 1 + PROXY_RETRIES : 1;
+    for (let t = 1; t <= tries; t++) {
+      lastAttemptError = null;
+      const res = await attempt(target, init, timeoutMs);
+      if (!res) {
+        // transport-level failure: same-route retry (flaky proxy), then next route
+        lastErr = new Error(`请求失败: ${target}（${lastAttemptError}）`);
+        if (t < tries) continue;
+        break;
+      }
+      // got an HTTP response. A CF WAF block page (403 HTML) means THIS route's
+      // egress IP is challenged — switch route right away instead of surfacing
+      // the HTML to callers (which used to die parsing it as JSON).
+      if (isBlockPage(res, '')) {
+        // peek at the body to confirm it's really a block page before switching
+        const clone = res.clone();
+        const text = await clone.text().catch(() => '');
+        if (isBlockPage(res, text)) {
+          lastErr = new Error(`目标返回 Cloudflare 拦截页 (HTTP ${res.status}): ${target}`);
+          break; // next route immediately — retrying this one repeats the block
+        }
+      }
+      return res;
+    }
   }
   throw new Error(
     `无法连接 Cloudflare API（直连与代理均失败）。可在「版本中心 → Cloudflare 加速代理」配置自建反代地址: ${lastErr?.message || ''}`
