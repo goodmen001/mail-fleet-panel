@@ -12841,13 +12841,13 @@ var require_webhook = __commonJS({
         const computedSignature = this.sign(msgId, timestamp, payload);
         const expectedSignature = computedSignature.split(",")[1];
         const passedSignatures = msgSignature.split(" ");
-        const encoder3 = new globalThis.TextEncoder();
+        const encoder4 = new globalThis.TextEncoder();
         for (const versionedSignature of passedSignatures) {
           const [version3, signature] = versionedSignature.split(",");
           if (version3 !== "v1") {
             continue;
           }
-          if ((0, timing_safe_equal_1.timingSafeEqual)(encoder3.encode(signature), encoder3.encode(expectedSignature))) {
+          if ((0, timing_safe_equal_1.timingSafeEqual)(encoder4.encode(signature), encoder4.encode(expectedSignature))) {
             return JSON.parse(payload.toString());
           }
         }
@@ -12860,9 +12860,9 @@ var require_webhook = __commonJS({
         } else {
           throw new Error("Expected payload to be of type string or Buffer. Please refer to https://docs.svix.com/receiving/verifying-payloads/how for more information.");
         }
-        const encoder3 = new TextEncoder();
+        const encoder4 = new TextEncoder();
         const timestampNumber = Math.floor(timestamp.getTime() / 1e3);
-        const toSign = encoder3.encode(`${msgId}.${timestampNumber}.${payload}`);
+        const toSign = encoder4.encode(`${msgId}.${timestampNumber}.${payload}`);
         const expectedSignature = base64.encode(sha256.hmac(this.key, toSign));
         return `v1,${expectedSignature}`;
       }
@@ -45266,9 +45266,9 @@ var Param = class {
    * @param value - Parameter value
    * @param encoder - Encoder to convert the value to a driver parameter
    */
-  constructor(value, encoder3 = noopEncoder) {
+  constructor(value, encoder4 = noopEncoder) {
     this.value = value;
-    this.encoder = encoder3;
+    this.encoder = encoder4;
   }
   static [entityKind] = "Param";
   brand;
@@ -45325,8 +45325,8 @@ __name(sql, "sql");
   }
   __name(placeholder2, "placeholder2");
   sql2.placeholder = placeholder2;
-  function param2(value, encoder3) {
-    return new Param(value, encoder3);
+  function param2(value, encoder4) {
+    return new Param(value, encoder4);
   }
   __name(param2, "param2");
   sql2.param = param2;
@@ -51639,6 +51639,18 @@ var verifyRecordService = {
     }
     await orm(c3).delete(verify_record_default).run();
   },
+  async consumeLoginAttempt(c3, limit) {
+    const ip = req_utils_default.getIp(c3);
+    const type = verifyRecordType.LOGIN;
+    const db = c3.env.db;
+    const [, updated] = await db.batch([
+      db.prepare(`INSERT INTO verify_record (ip, type, count)
+				SELECT ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM verify_record WHERE ip = ? AND type = ?)`).bind(ip, type, ip, type),
+      db.prepare(`UPDATE verify_record SET count = count + 1, update_time = CURRENT_TIMESTAMP
+				WHERE ip = ? AND type = ? AND count < ? RETURNING vr_id`).bind(ip, type, limit)
+    ]);
+    return updated.results.length > 0;
+  },
   async isOpenRegVerify(c3, regVerifyCount) {
     const ip = req_utils_default.getIp(c3);
     const row = await orm(c3).select().from(verify_record_default).where(and(eq(verify_record_default.ip, ip), eq(verify_record_default.type, verifyRecordType.REG))).get();
@@ -51784,6 +51796,11 @@ var settingConst = {
     CLOSE: 1,
     COUNT: 2
   },
+  loginVerify: {
+    OPEN: 0,
+    CLOSE: 1,
+    COUNT: 2
+  },
   addEmailVerify: {
     OPEN: 0,
     CLOSE: 1,
@@ -51832,7 +51849,8 @@ var settingConst = {
 };
 var verifyRecordType = {
   REG: 0,
-  ADD: 1
+  ADD: 1,
+  LOGIN: 2
 };
 var isDel = {
   DELETE: 1,
@@ -51854,10 +51872,12 @@ var setting = sqliteTable("setting", {
   title: text("title").default("").notNull(),
   manyEmail: integer("many_email").default(0).notNull(),
   addEmail: integer("add_email").default(0).notNull(),
-  autoRefresh: integer("auto_refresh").default(0).notNull(),
+  autoRefresh: integer("auto_refresh").default(2).notNull(),
   addEmailVerify: integer("add_email_verify").default(1).notNull(),
   registerVerify: integer("register_verify").default(1).notNull(),
   regVerifyCount: integer("reg_verify_count").default(1).notNull(),
+  loginVerify: integer("login_verify").default(1).notNull(),
+  loginVerifyCount: integer("login_verify_count").default(1).notNull(),
   addVerifyCount: integer("add_verify_count").default(1).notNull(),
   send: integer("send").default(1).notNull(),
   r2Domain: text("r2_domain"),
@@ -56329,7 +56349,7 @@ var createChecksumStream = /* @__PURE__ */ __name(({ expectedChecksum, checksum,
   if (!isReadableStream(source)) {
     throw new Error(`@smithy/util-stream: unsupported source type ${source?.constructor?.name ?? source} in ChecksumStream.`);
   }
-  const encoder3 = base64Encoder ?? toBase642;
+  const encoder4 = base64Encoder ?? toBase642;
   if (typeof TransformStream !== "function") {
     throw new Error("@smithy/util-stream: unable to instantiate ChecksumStream because API unavailable: ReadableStream/TransformStream.");
   }
@@ -56342,7 +56362,7 @@ var createChecksumStream = /* @__PURE__ */ __name(({ expectedChecksum, checksum,
     },
     async flush(controller) {
       const digest = await checksum.digest();
-      const received = encoder3(digest);
+      const received = encoder4(digest);
       if (expectedChecksum !== received) {
         const error = new Error(`Checksum mismatch: expected "${expectedChecksum}" but received "${received}" in response header "${checksumSourceLocation}".`);
         controller.error(error);
@@ -64081,6 +64101,62 @@ var domainUtils = {
 };
 var domain_uitls_default = domainUtils;
 
+// src/utils/att-headers.js
+var ATT_CACHE_CONTROL = "public, max-age=14400";
+var SAFE_INLINE_TYPES = /* @__PURE__ */ new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "image/vnd.microsoft.icon"
+]);
+function mimeTypeOf(contentType) {
+  if (!contentType) {
+    return "";
+  }
+  return String(contentType).split(";")[0].trim().toLowerCase();
+}
+__name(mimeTypeOf, "mimeTypeOf");
+function isSafeInlineAtt(contentType) {
+  return SAFE_INLINE_TYPES.has(mimeTypeOf(contentType));
+}
+__name(isSafeInlineAtt, "isSafeInlineAtt");
+function isDangerousAttType(contentType) {
+  const type = mimeTypeOf(contentType);
+  return /svg|html|xml|javascript|ecmascript/.test(type);
+}
+__name(isDangerousAttType, "isDangerousAttType");
+function publicFileHeaders({ contentType, contentDisposition } = {}) {
+  const type = mimeTypeOf(contentType);
+  const safeInline = SAFE_INLINE_TYPES.has(type);
+  return {
+    "Content-Type": isDangerousAttType(type) || !type ? "application/octet-stream" : contentType,
+    "Content-Disposition": safeInline ? contentDisposition || "inline" : toAttachmentDisposition(contentDisposition),
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "sandbox",
+    "Cache-Control": ATT_CACHE_CONTROL
+  };
+}
+__name(publicFileHeaders, "publicFileHeaders");
+function toAttachmentDisposition(disposition) {
+  if (!disposition) {
+    return "attachment";
+  }
+  const value = String(disposition);
+  if (/^\s*inline\b/i.test(value)) {
+    return value.replace(/^\s*inline/i, "attachment");
+  }
+  if (/^\s*attachment\b/i.test(value)) {
+    return value;
+  }
+  return `attachment; ${value}`;
+}
+__name(toAttachmentDisposition, "toAttachmentDisposition");
+
 // src/service/s3-service.js
 var s3Service = {
   async putObj(c3, key2, content, metadata) {
@@ -64115,8 +64191,8 @@ var s3Service = {
     client.middlewareStack.add(
       (next) => async (args) => {
         const body = args.request.body;
-        const encoder3 = new TextEncoder();
-        const data = encoder3.encode(body);
+        const encoder4 = new TextEncoder();
+        const data = encoder4.encode(body);
         const hashBuffer = await crypto.subtle.digest("MD5", data);
         const hashArray = new Uint8Array(hashBuffer);
         const contentMD5 = btoa(String.fromCharCode.apply(null, hashArray));
@@ -64142,11 +64218,10 @@ var s3Service = {
       Key: key2
     }));
     return new Response(result2.Body, {
-      headers: {
-        "Content-Type": result2.ContentType || "application/octet-stream",
-        "Content-Disposition": result2.ContentDisposition || null,
-        "Cache-Control": result2.CacheControl || null
-      }
+      headers: publicFileHeaders({
+        contentType: result2.ContentType,
+        contentDisposition: result2.ContentDisposition
+      })
     });
   },
   async client(c3) {
@@ -64184,11 +64259,10 @@ var kvObjService = {
       return null;
     }
     return new Response(obj.value, {
-      headers: {
-        "Content-Type": obj.metadata?.contentType || "application/octet-stream",
-        "Content-Disposition": obj.metadata?.contentDisposition || null,
-        "Cache-Control": obj.metadata?.cacheControl || null
-      }
+      headers: publicFileHeaders({
+        contentType: obj.metadata?.contentType,
+        contentDisposition: obj.metadata?.contentDisposition
+      })
     });
   },
   async toObjResp(c3, key2) {
@@ -64252,11 +64326,10 @@ var r2Service = {
           return null;
         }
         return new Response(obj.body, {
-          headers: {
-            "Content-Type": obj.httpMetadata?.contentType || "application/octet-stream",
-            "Content-Disposition": obj.httpMetadata?.contentDisposition || null,
-            "Cache-Control": obj.httpMetadata?.cacheControl || null
-          }
+          headers: publicFileHeaders({
+            contentType: obj.httpMetadata?.contentType,
+            contentDisposition: obj.httpMetadata?.contentDisposition
+          })
         });
       }
       if (storageType === "S3") {
@@ -66770,7 +66843,7 @@ var en_default = en;
 
 // src/i18n/i18n.js
 hono_default.use("*", async (c3, next) => {
-  const lang = c3.req.header("accept-language")?.split("-")[0];
+  const lang = c3.req.header("accept-language")?.split("-")[0] || "en";
   instance.init({
     lng: lang
   });
@@ -66785,7 +66858,7 @@ var resources = {
   }
 };
 instance.init({
-  fallbackLng: "zh",
+  fallbackLng: "en",
   resources
 });
 var t3 = /* @__PURE__ */ __name((key2, values) => instance.t(key2, values), "t");
@@ -66845,18 +66918,18 @@ var settingService = {
       projectLink = true;
     }
     setting2.projectLink = projectLink;
+    setting2.loginVerify ??= settingConst.loginVerify.CLOSE;
+    setting2.loginVerifyCount ??= 1;
     setting2.emailPrefixFilter = setting2.emailPrefixFilter.split(",").filter(Boolean);
+    setting2.autoRefresh = Number(setting2.autoRefresh) === 1 ? 1 : 2;
     c3.set?.("setting", setting2);
     return setting2;
   },
-  async get(c3, showSiteKey = false) {
+  async get(c3) {
     const [settingRow, recordList] = await Promise.all([
       await this.query(c3),
       verify_record_service_default.selectListByIP(c3)
     ]);
-    if (!showSiteKey) {
-      settingRow.siteKey = settingRow.siteKey ? `${settingRow.siteKey.slice(0, 6)}******` : null;
-    }
     settingRow.secretKey = settingRow.secretKey ? `${settingRow.secretKey.slice(0, 6)}******` : null;
     Object.keys(settingRow.resendTokens).forEach((key2) => {
       settingRow.resendTokens[key2] = `${settingRow.resendTokens[key2].slice(0, 12)}******`;
@@ -66868,6 +66941,7 @@ var settingService = {
     settingRow.hasCfEmail = !!c3.env.email;
     let regVerifyOpen = false;
     let addVerifyOpen = false;
+    let loginVerifyOpen = false;
     recordList.forEach((row) => {
       if (row.type === verifyRecordType.REG) {
         regVerifyOpen = row.count >= settingRow.regVerifyCount;
@@ -66875,9 +66949,13 @@ var settingService = {
       if (row.type === verifyRecordType.ADD) {
         addVerifyOpen = row.count >= settingRow.addVerifyCount;
       }
+      if (row.type === verifyRecordType.LOGIN) {
+        loginVerifyOpen = row.count >= settingRow.loginVerifyCount;
+      }
     });
     settingRow.regVerifyOpen = regVerifyOpen;
     settingRow.addVerifyOpen = addVerifyOpen;
+    settingRow.loginVerifyOpen = loginVerifyOpen;
     settingRow.storageType = await r2_service_default.storageType(c3);
     return settingRow;
   },
@@ -66897,6 +66975,12 @@ var settingService = {
       params.webhookUrl = domain_uitls_default.toOssDomain(params.webhookUrl) || "";
     }
     params.resendTokens = JSON.stringify(resendTokens);
+    if (params.autoRefresh !== void 0) {
+      params.autoRefresh = Number(params.autoRefresh) === 1 ? 1 : 2;
+    }
+    if (params.loginVerifyCount !== void 0 && (!Number.isSafeInteger(params.loginVerifyCount) || params.loginVerifyCount < 1)) {
+      params.loginVerifyCount = 1;
+    }
     await orm(c3).update(setting_default).set({ ...params }).returning().get();
     await this.refresh(c3);
   },
@@ -66938,7 +67022,7 @@ var settingService = {
     return this.get(c3);
   },
   async websiteConfig(c3) {
-    const settingRow = await this.get(c3, true);
+    const settingRow = await this.get(c3);
     const token2 = await user_context_default.getToken(c3);
     return {
       register: settingRow.register,
@@ -66948,6 +67032,7 @@ var settingService = {
       autoRefresh: settingRow.autoRefresh,
       addEmailVerify: settingRow.addEmailVerify,
       registerVerify: settingRow.registerVerify,
+      loginVerify: settingRow.loginVerify,
       send: settingRow.send,
       r2Domain: settingRow.r2Domain,
       siteKey: settingRow.siteKey,
@@ -66957,6 +67042,7 @@ var settingService = {
       regKey: settingRow.regKey,
       regVerifyOpen: settingRow.regVerifyOpen,
       addVerifyOpen: settingRow.addVerifyOpen,
+      loginVerifyOpen: settingRow.loginVerifyOpen,
       noticeTitle: settingRow.noticeTitle,
       noticeContent: settingRow.noticeContent,
       noticeType: settingRow.noticeType,
@@ -68268,18 +68354,413 @@ function v42(options, buf, offset) {
 __name(v42, "v4");
 var v4_default2 = v42;
 
+// src/service/proxy-service.js
+var ATTRS = ["src", "poster", "background", "data-src", "data-original", "data-lazy-src"];
+var PROXY_MEDIA_TYPES = /* @__PURE__ */ new Set([
+  "image/avif",
+  "image/bmp",
+  "image/gif",
+  "image/jpeg",
+  "image/pjpeg",
+  "image/png",
+  "image/webp",
+  "image/apng",
+  "image/x-icon",
+  "image/vnd.microsoft.icon"
+]);
+var PROXY_IMAGE_EXTENSIONS = /* @__PURE__ */ new Map([
+  ["avif", "image/avif"],
+  ["bmp", "image/bmp"],
+  ["gif", "image/gif"],
+  ["jpg", "image/jpeg"],
+  ["jpeg", "image/jpeg"],
+  ["jpe", "image/jpeg"],
+  ["jfif", "image/jpeg"],
+  ["pjpeg", "image/pjpeg"],
+  ["png", "image/png"],
+  ["webp", "image/webp"],
+  ["apng", "image/apng"],
+  ["ico", "image/x-icon"]
+]);
+var PROXY_IP_PLACEHOLDER = "192.0.2.1";
+var PROXY_LINK_TTL = 3600;
+var PROXY_MAX_REDIRECTS = 5;
+var PROXY_REDIRECT_STATUSES = /* @__PURE__ */ new Set([301, 302, 303, 307, 308]);
+var encoder2 = new TextEncoder();
+var proxyService = {
+  // 改写单封邮件 HTML：内部读取 R2 域名，把外链图换成 /proxy?url=。
+  // 不写回数据库，只影响本次查询响应。CID / data / 本站附件不改。
+  async rewriteHtml(c3, html) {
+    if (!html) {
+      return html;
+    }
+    const { r2Domain } = await setting_service_default.query(c3);
+    return this.applyRewrite(html, this.rewriter(await this.signingKey(c3.env), r2Domain), r2Domain);
+  },
+  // 批量改写邮件列表的 content，R2 域名只查一次。
+  async rewriteList(c3, list) {
+    if (!list?.length) {
+      return list;
+    }
+    const { r2Domain } = await setting_service_default.query(c3);
+    const rewriteUrl = this.rewriter(await this.signingKey(c3.env), r2Domain);
+    for (const item of list) {
+      if (!item.content) {
+        continue;
+      }
+      item.content = await this.applyRewrite(item.content, rewriteUrl, r2Domain);
+    }
+    return list;
+  },
+  // 发出邮件前把 /proxy?url= 还原成原始外链，避免引用正文把代理地址带给收件人。
+  restoreHtml(html) {
+    if (!html) {
+      return html;
+    }
+    return this.applyRestore(html);
+  },
+  // Worker 入口 /proxy：验签后代拉，只返回允许的图片类型。
+  async fetchImage(env, params) {
+    const rawUrl = params.get("url");
+    const exp = params.get("exp");
+    const signature = this.decodeSignature(params.get("sig"));
+    if (!rawUrl || !/^[1-9]\d{0,12}$/.test(exp) || Number(exp) <= Math.floor(Date.now() / 1e3) || !signature) {
+      return new Response(null, { status: 403 });
+    }
+    try {
+      const key2 = await this.signingKey(env);
+      const valid = await crypto.subtle.verify("HMAC", key2, signature, this.signatureInput(rawUrl, exp));
+      if (!valid) {
+        return new Response(null, { status: 403 });
+      }
+      let target = this.proxyTarget(rawUrl);
+      if (!target) {
+        return new Response(null, { status: 400 });
+      }
+      const requestOptions = {
+        redirect: "manual",
+        // 使用文档保留地址覆盖可修改的访客 IP 头。
+        headers: {
+          "X-Real-IP": PROXY_IP_PLACEHOLDER,
+          "CF-Connecting-IP": PROXY_IP_PLACEHOLDER
+        }
+      };
+      let res = await fetch(target.href, requestOptions);
+      for (let redirects = 0; PROXY_REDIRECT_STATUSES.has(res.status); redirects++) {
+        const location = res.headers.get("Location");
+        await res.body?.cancel();
+        if (redirects >= PROXY_MAX_REDIRECTS) {
+          return new Response(null, { status: 502 });
+        }
+        target = this.proxyTarget(location, target);
+        if (!target) {
+          return new Response(null, { status: 502 });
+        }
+        res = await fetch(target.href, requestOptions);
+      }
+      if (!res.ok) {
+        await res.body?.cancel();
+        return new Response(null, { status: 502 });
+      }
+      let type = res.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase();
+      if (!type || type === "application/octet-stream") {
+        const extension = target.pathname.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+        type = PROXY_IMAGE_EXTENSIONS.get(extension);
+      }
+      if (!res.body || !PROXY_MEDIA_TYPES.has(type)) {
+        await res.body?.cancel();
+        return new Response(null, { status: 415 });
+      }
+      const headers = new Headers({
+        "Content-Type": type,
+        "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "sandbox; default-src 'none'",
+        "Referrer-Policy": "no-referrer",
+        "Cache-Control": "public, max-age=3600"
+      });
+      const disposition = res.headers.get("Content-Disposition");
+      if (disposition) {
+        headers.set("Content-Disposition", disposition);
+      }
+      let body = res.body;
+      const length = res.headers.get("Content-Length");
+      const encoding = res.headers.get("Content-Encoding")?.toLowerCase();
+      if (length && /^\d+$/.test(length) && Number.isSafeInteger(Number(length)) && (!encoding || encoding === "identity")) {
+        const { readable, writable } = new FixedLengthStream(Number(length));
+        body.pipeTo(writable).catch(() => {
+        });
+        body = readable;
+      }
+      return new Response(body, { status: res.status, headers });
+    } catch {
+      return new Response(null, { status: 502 });
+    }
+  },
+  // ---------- 私有方法 ----------
+  decodeSignature(sig) {
+    if (!sig || !/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/.test(sig)) {
+      return null;
+    }
+    const base64 = sig.replaceAll("-", "+").replaceAll("_", "/") + "=";
+    return Uint8Array.from(atob(base64), (ch2) => ch2.charCodeAt(0));
+  },
+  async signingKey(env) {
+    if (!env.jwt_secret) {
+      throw new Error("Missing jwt_secret for image proxy");
+    }
+    const algorithm = { name: "HMAC", hash: "SHA-256" };
+    const root = await crypto.subtle.importKey("raw", encoder2.encode(env.jwt_secret), algorithm, false, ["sign"]);
+    const key2 = await crypto.subtle.sign("HMAC", root, encoder2.encode("cloud-mail/image-proxy/v1"));
+    return crypto.subtle.importKey("raw", key2, algorithm, false, ["sign", "verify"]);
+  },
+  signatureInput(url, exp) {
+    return encoder2.encode(JSON.stringify([url, exp]));
+  },
+  rewriter(key2, r2Domain) {
+    const exp = String(Math.floor(Date.now() / 1e3) + PROXY_LINK_TTL);
+    return (raw2) => {
+      const restored = this.fromProxyPath(raw2);
+      const url = restored || (this.shouldProxyUrl(raw2, r2Domain) ? this.absoluteUrl(raw2) : null);
+      return url ? this.toProxyPath(url, exp, key2) : null;
+    };
+  },
+  proxyTarget(rawUrl, base) {
+    if (!rawUrl?.trim()) {
+      return null;
+    }
+    try {
+      const url = new URL(rawUrl, base);
+      const host = url.hostname.replace(/\.$/, "");
+      if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) {
+        return null;
+      }
+      if (!host.includes(".") || host.startsWith("[") || /^[\d.]+$/.test(host) || /\.(localhost|local|internal)$/.test(host)) {
+        return null;
+      }
+      return url;
+    } catch {
+      return null;
+    }
+  },
+  // 在生成代理链接前移除疑似追踪图：宽或高为 0，或宽高均为 1px 的外链图片。
+  // 检查普通、懒加载和响应式图片来源，也识别已经改写过的代理链接。
+  removeTrackingImages(document, r2Domain) {
+    const isExternal = /* @__PURE__ */ __name((url) => this.fromProxyPath(url) || this.shouldProxyUrl(url, r2Domain), "isExternal");
+    const hasExternalImage = /* @__PURE__ */ __name((el) => ATTRS.some((attr) => isExternal(el.getAttribute(attr))) || el.getAttribute("srcset")?.split(",").some((candidate) => isExternal(candidate.trim().split(/\s+/, 1)[0])), "hasExternalImage");
+    for (const img of document.querySelectorAll("img")) {
+      const width = this.imageDimension(img, "width");
+      const height = this.imageDimension(img, "height");
+      if (width !== 0 && height !== 0 && !(width === 1 && height === 1)) {
+        continue;
+      }
+      const picture = img.parentElement?.localName === "picture" ? img.parentElement : null;
+      if (hasExternalImage(img) || picture && Array.from(picture.querySelectorAll("source")).some(hasExternalImage)) {
+        (picture || img).remove();
+      }
+    }
+  },
+  // 优先读取内联样式，再回退到对应的 HTML 属性。
+  // 仅识别过滤规则所需的 0 和 1px，其余值返回 undefined。
+  imageDimension(img, name2) {
+    const value = (img.style.getPropertyValue(name2) || img.getAttribute(name2) || "").replace(/\s*!important$/i, "").trim();
+    if (/^(?:0+(?:\.0+)?|\.0+)(?:px|%)?$/i.test(value)) {
+      return 0;
+    }
+    if (/^0*1(?:\.0+)?(?:px)?$/i.test(value)) {
+      return 1;
+    }
+  },
+  // 解析 HTML，把 img/srcset/CSS url 等外链改成带签名的同源代理地址。
+  async applyRewrite(html, rewriteUrl, r2Domain) {
+    const { document } = parseHTML(html);
+    this.removeTrackingImages(document, r2Domain);
+    const updates = [];
+    const rewriteAttr = /* @__PURE__ */ __name(async (el, attr) => {
+      const path = await rewriteUrl(el.getAttribute(attr));
+      if (path) {
+        el.setAttribute(attr, path);
+      }
+    }, "rewriteAttr");
+    document.querySelectorAll("img,source,video,audio,track,input").forEach((el) => {
+      ATTRS.forEach((attr) => updates.push(rewriteAttr(el, attr)));
+      const srcset = el.getAttribute("srcset");
+      if (srcset) {
+        updates.push(this.rewriteSrcset(srcset, rewriteUrl).then((value) => el.setAttribute("srcset", value)));
+      }
+    });
+    document.querySelectorAll("[background]").forEach((el) => updates.push(rewriteAttr(el, "background")));
+    document.querySelectorAll("[style]").forEach((el) => {
+      updates.push(this.rewriteCssUrls(el.getAttribute("style"), rewriteUrl).then((value) => el.setAttribute("style", value)));
+    });
+    document.querySelectorAll("style").forEach((el) => {
+      updates.push(this.rewriteCssUrls(el.textContent, rewriteUrl).then((value) => {
+        el.textContent = value;
+      }));
+    });
+    await Promise.all(updates);
+    return document.toString();
+  },
+  // 把正文里的 /proxy?url= 还原成原始地址。
+  applyRestore(html) {
+    const { document } = parseHTML(html);
+    const restoreAttr = /* @__PURE__ */ __name((el, attr) => {
+      const original = this.fromProxyPath(el.getAttribute(attr));
+      if (original) {
+        el.setAttribute(attr, original);
+      }
+    }, "restoreAttr");
+    document.querySelectorAll("img,source,video,audio,track,input").forEach((el) => {
+      ATTRS.forEach((attr) => restoreAttr(el, attr));
+      const srcset = el.getAttribute("srcset");
+      if (srcset) {
+        el.setAttribute("srcset", this.restoreSrcset(srcset));
+      }
+    });
+    document.querySelectorAll("[background]").forEach((el) => restoreAttr(el, "background"));
+    document.querySelectorAll("[style]").forEach((el) => {
+      el.setAttribute("style", this.restoreCssUrls(el.getAttribute("style")));
+    });
+    document.querySelectorAll("style").forEach((el) => {
+      el.textContent = this.restoreCssUrls(el.textContent);
+    });
+    return document.toString();
+  },
+  // 拼浏览器可直接请求的签名代理地址。
+  async toProxyPath(url, exp, key2) {
+    const signature = await crypto.subtle.sign("HMAC", key2, this.signatureInput(url, exp));
+    const sig = btoa(String.fromCharCode(...new Uint8Array(signature))).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    return "/proxy?" + new URLSearchParams({ url, exp, sig });
+  },
+  // 从新旧代理链接中还原原图地址，兼容编辑器输出的相对地址。
+  fromProxyPath(raw2) {
+    if (!raw2 || !String(raw2).includes("proxy?")) {
+      return null;
+    }
+    try {
+      const path = new URL(raw2, "https://proxy.invalid/");
+      if (path.pathname !== "/proxy") {
+        return null;
+      }
+      const original = path.searchParams.get("url");
+      return /^https?:\/\//i.test(original || "") ? original : null;
+    } catch {
+      return null;
+    }
+  },
+  // 协议相对地址 //cdn.example/a.png 补成 https:。
+  absoluteUrl(value) {
+    const trimmed = String(value).trim();
+    if (trimmed.startsWith("//")) {
+      return "https:" + trimmed;
+    }
+    return trimmed;
+  },
+  // 只代理 http(s) 外链；跳过 CID、data/blob、本站附件、已代理地址、自有 R2。
+  shouldProxyUrl(raw2, r2Domain) {
+    if (!raw2) {
+      return false;
+    }
+    const value = String(raw2).trim();
+    if (!value || value.startsWith("{{domain}}") || /^(data:|blob:|cid:)/i.test(value)) {
+      return false;
+    }
+    if (value.includes("proxy?url=")) {
+      return false;
+    }
+    if (value.startsWith("//")) {
+      return this.shouldProxyUrl("https:" + value, r2Domain);
+    }
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(value)) {
+      return false;
+    }
+    let parsed;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return false;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    const origin = this.r2Origin(r2Domain);
+    return !(origin && parsed.origin === origin);
+  },
+  // 改写 srcset 里每一段 URL，保留 1x / 2x 等描述符。
+  async rewriteSrcset(srcset, rewriteUrl) {
+    const parts = await Promise.all(String(srcset).split(",").map(async (part) => {
+      const bits = part.trim().split(/\s+/);
+      const path = await rewriteUrl(bits[0]);
+      if (path) {
+        bits[0] = path;
+      }
+      return bits.join(" ");
+    }));
+    return parts.join(", ");
+  },
+  // 还原 srcset 里每一段代理地址。
+  restoreSrcset(srcset) {
+    return String(srcset).split(",").map((part) => {
+      const bits = part.trim().split(/\s+/);
+      const original = this.fromProxyPath(bits[0]);
+      if (original) {
+        bits[0] = original;
+      }
+      return bits.join(" ");
+    }).join(", ");
+  },
+  // 改写 style / <style> 中的 url(...)，一般是背景图。
+  async rewriteCssUrls(css, rewriteUrl) {
+    if (!css) {
+      return css;
+    }
+    const pattern = /url\(\s*(['"]?)(.*?)\1\s*\)/gi;
+    const paths = await Promise.all(Array.from(css.matchAll(pattern), (match2) => rewriteUrl(match2[2])));
+    let index = 0;
+    return css.replace(pattern, (match2, quote) => {
+      const path = paths[index++];
+      return path ? "url(" + quote + path + quote + ")" : match2;
+    });
+  },
+  // 还原 CSS url(...) 里的代理地址。
+  restoreCssUrls(css) {
+    if (!css) {
+      return css;
+    }
+    return String(css).replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (match2, quote, url) => {
+      const original = this.fromProxyPath(url);
+      if (!original) {
+        return match2;
+      }
+      return `url(${quote}${original}${quote})`;
+    });
+  },
+  // 把配置里的 R2 域名收成 origin，用来识别自有对象存储上的图。
+  r2Origin(r2Domain) {
+    if (!r2Domain) {
+      return "";
+    }
+    try {
+      const withScheme = /^https?:\/\//i.test(r2Domain) ? r2Domain : `https://${r2Domain}`;
+      return new URL(withScheme).origin;
+    } catch {
+      return "";
+    }
+  }
+};
+var proxy_service_default = proxyService;
+
 // src/service/att-service.js
 var attService = {
   async addAtt(c3, attachments) {
     for (let attachment of attachments) {
       let metadate = {
-        contentType: attachment.mimeType
+        contentType: isDangerousAttType(attachment.mimeType) ? "application/octet-stream" : attachment.mimeType
       };
-      if (!attachment.contentId) {
-        metadate.contentDisposition = `attachment;filename=${attachment.filename}`;
+      if (attachment.contentId) {
+        metadate.cacheControl = ATT_CACHE_CONTROL;
+        metadate.contentDisposition = isSafeInlineAtt(attachment.mimeType) ? `inline;filename=${attachment.filename}` : `attachment;filename=${attachment.filename}`;
       } else {
-        metadate.contentDisposition = `inline;filename=${attachment.filename}`;
-        metadate.cacheControl = `max-age=259200`;
+        metadate.contentDisposition = `attachment;filename=${attachment.filename}`;
       }
       await r2_service_default.putObj(c3, attachment.key, attachment.content, metadate);
     }
@@ -68319,15 +68800,22 @@ var attService = {
         attData.contentId = cid;
         imageDataList.push(attData);
       }
-      if (src && (src.startsWith(domain_uitls_default.toOssDomain(r2Domain)) || src.startsWith("attachments/"))) {
+      const proxyUrl = proxy_service_default.fromProxyPath(src);
+      if (proxyUrl) {
+        img.setAttribute("src", proxyUrl);
+      }
+      const attKey = this.fromAttSrc(src);
+      const ossDomain = domain_uitls_default.toOssDomain(r2Domain);
+      const fromOss = ossDomain && src && src.startsWith(ossDomain);
+      if (fromOss || attKey) {
         const cid = v4_default2().replace(/-/g, "");
         img.setAttribute("src", "cid:" + cid);
         const attData = {};
-        if (src.startsWith(domain_uitls_default.toOssDomain(r2Domain))) {
-          attData.key = src.replace(domain_uitls_default.toOssDomain(r2Domain) + "/", "");
+        if (fromOss) {
+          attData.key = src.replace(ossDomain + "/", "");
         }
-        if (src.startsWith("attachments/")) {
-          attData.key = src;
+        if (attKey) {
+          attData.key = attKey;
         }
         attData.contentId = cid;
         attData.type = attConst.type.EMBED;
@@ -68395,9 +68883,9 @@ var attService = {
         continue;
       }
       await r2_service_default.putObj(c3, attData.key, attData.buff, {
-        contentType: attData.mimeType,
-        cacheControl: `max-age=259200`,
-        contentDisposition: `inline;filename=${attData.filename}`
+        contentType: isDangerousAttType(attData.mimeType) ? "application/octet-stream" : attData.mimeType,
+        cacheControl: ATT_CACHE_CONTROL,
+        contentDisposition: isSafeInlineAtt(attData.mimeType) ? `inline;filename=${attData.filename}` : `attachment;filename=${attData.filename}`
       });
       delete attData.buff;
     }
@@ -68460,6 +68948,18 @@ var attService = {
       return [];
     }
     return orm(c3).select().from(att).where(inArray(att.key, keys2)).orderBy(desc(att.attId)).groupBy(att.key).all();
+  },
+  // attachments/、/attachments/、../attachments/ 都收成存储 key。
+  fromAttSrc(src) {
+    if (!src) {
+      return null;
+    }
+    const marker = "attachments/";
+    const idx = String(src).indexOf(marker);
+    if (idx === -1) {
+      return null;
+    }
+    return String(src).slice(idx);
   }
 };
 var att_service_default = attService;
@@ -68712,6 +69212,7 @@ var starService = {
       list.forEach((emailRow) => {
         emailRow.attList = attsList.filter((attsRow) => attsRow.emailId === emailRow.emailId);
       });
+      await proxy_service_default.rewriteList(c3, list);
     } else {
       list.forEach((emailRow) => {
         emailRow.listText = email_service_default.toListText(emailRow);
@@ -68807,6 +69308,7 @@ __name(emailMsgTemplate, "emailMsgTemplate");
 
 // src/template/email-text.js
 function emailTextTemplate(text2) {
+  const escapedText = text2.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   return `<!DOCTYPE html>
 <html lang='en' >
 <head>
@@ -68837,18 +69339,34 @@ function emailTextTemplate(text2) {
     </style>
 </head>
 <body>
-<span>${text2}</span>
+<span>${escapedText}</span>
 </body>
 </html>`;
 }
 __name(emailTextTemplate, "emailTextTemplate");
 
 // src/template/email-html.js
-function emailHtmlTemplate(html, domain) {
+function emailHtmlTemplate(html) {
   const { document } = parseHTML(html);
   document.querySelectorAll("script").forEach((script) => script.remove());
+  document.querySelectorAll("*").forEach((el) => {
+    for (const name2 of el.getAttributeNames()) {
+      const lower = name2.toLowerCase();
+      if (lower.startsWith("on") || lower === "srcdoc") {
+        el.removeAttribute(name2);
+        continue;
+      }
+      if (!["href", "src", "xlink:href", "action", "formaction", "poster", "background"].includes(lower)) {
+        continue;
+      }
+      const value = (el.getAttribute(name2) || "").trim();
+      if (/^(javascript|vbscript):/i.test(value)) {
+        el.removeAttribute(name2);
+      }
+    }
+  });
   html = document.toString();
-  html = html.replace(/{{domain}}/g, domain_uitls_default.toOssDomain(domain) + "/");
+  html = html.replace(/{{domain}}/g, "/");
   const safeHtmlJson = JSON.stringify(html).replace(/</g, "\\u003C");
   return `<!DOCTYPE html>
 <html lang='en' >
@@ -68992,8 +69510,8 @@ var telegramService = {
     const emailRow = await orm(c3).select().from(email_default).where(eq(email_default.emailId, result2.emailId)).get();
     if (emailRow) {
       if (emailRow.content) {
-        const { r2Domain } = await setting_service_default.query(c3);
-        return emailHtmlTemplate(emailRow.content || "", r2Domain);
+        const html = await proxy_service_default.rewriteHtml(c3, emailRow.content);
+        return emailHtmlTemplate(html || "");
       } else {
         return emailTextTemplate(emailRow.text || "");
       }
@@ -69224,6 +69742,44 @@ ${parts.join("\r\n")}`;
 };
 var forward_mime_default = forwardMime;
 
+// src/websocket/notify.js
+var ALL_EMAIL_HUB = "all-email";
+function notifyMailWs(env, ctx, emailRow) {
+  if (!env?.ws) {
+    return;
+  }
+  const payload = {
+    type: "new_message",
+    emailId: emailRow?.emailId,
+    accountId: emailRow?.accountId,
+    userId: emailRow?.userId || 0
+  };
+  const tasks = [];
+  if (emailRow?.userId) {
+    tasks.push(env.ws.getByName(String(emailRow.userId)).notify(payload));
+  }
+  tasks.push(env.ws.getByName(ALL_EMAIL_HUB).notify(payload));
+  const task = Promise.all(tasks).catch((err) => {
+    console.error("ws notify failed", err);
+  });
+  if (ctx && typeof ctx.waitUntil === "function") {
+    ctx.waitUntil(task);
+  } else {
+    void task;
+  }
+}
+__name(notifyMailWs, "notifyMailWs");
+function notifyMailWsFromContext(c3, emailRow) {
+  let ctx;
+  try {
+    ctx = c3.executionCtx;
+  } catch {
+    ctx = void 0;
+  }
+  notifyMailWs(c3.env, ctx, emailRow);
+}
+__name(notifyMailWsFromContext, "notifyMailWsFromContext");
+
 // src/service/email-service.js
 var emailService = {
   async list(c3, params, userId) {
@@ -69428,7 +69984,9 @@ var emailService = {
     return conditions;
   },
   allEmailListFilters({ emailId, name: name2, subject, accountEmail, userEmail, type, timeSort, withCursor = true, text: text2, searchType, startDate, endDate }) {
-    const conditions = [];
+    const conditions = [
+      ne(email_default.status, emailConst.status.SAVING)
+    ];
     if (type === "send") {
       conditions.push(eq(email_default.type, emailConst.type.SEND));
     }
@@ -69565,6 +70123,7 @@ var emailService = {
     ccEmail.forEach((address) => takenAddress.add(address.toLowerCase()));
     bccEmail = bccEmail.filter((address) => !takenAddress.has(address.toLowerCase()));
     const { resendTokens, r2Domain, send, domainList } = await setting_service_default.query(c3);
+    content = proxy_service_default.restoreHtml(content);
     let { imageDataList, html } = await att_service_default.toImageUrlHtml(c3, content);
     if (send === settingConst.send.CLOSE) {
       throw new biz_error_default(t3("disabledSend"), 403);
@@ -70075,6 +70634,7 @@ var emailService = {
     for (const emailData of receiveEmailList) {
       const emailRow = await orm(c3).insert(email_default).values(emailData).returning().get();
       emailRowList.push(emailRow);
+      notifyMailWsFromContext(c3, emailRow);
       for (const attRow of attList) {
         const attValues = { ...attRow };
         attValues.emailId = emailRow.emailId;
@@ -70095,12 +70655,22 @@ var emailService = {
     await orm(c3).update(email_default).set({ status, message }).where(eq(email_default.emailId, sendEmailData.emailId)).run();
     return emailRowList;
   },
+  // 规则转发：只按所属用户登录邮箱匹配，名单仍存在 rule_email。
+  matchForwardRule({ ruleEmail, userEmail }) {
+    const users = String(ruleEmail || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean);
+    return !!(userEmail && users.includes(String(userEmail).toLowerCase()));
+  },
   //站内邮件不经过 email 事件，在这里按转发规则推送
   async forwardOnSiteEmail(c3, emailRowList, { sendParams }) {
     const { tgBotStatus, tgChatId, forwardStatus, forwardEmail, webhookStatus, webhookUrl, webhookRetry, webhookSecret, ruleEmail, ruleType } = await setting_service_default.query(c3);
     if (ruleType === settingConst.ruleType.RULE) {
-      const emails = ruleEmail.split(",");
-      emailRowList = emailRowList.filter((emailRow) => emails.includes(emailRow.toEmail));
+      const userIds = [...new Set(emailRowList.map((row) => row.userId).filter(Boolean))];
+      const userRows = userIds.length ? await orm(c3).select({ userId: user_default.userId, email: user_default.email }).from(user_default).where(inArray(user_default.userId, userIds)).all() : [];
+      const userEmailById = Object.fromEntries(userRows.map((row) => [row.userId, row.email]));
+      emailRowList = emailRowList.filter((emailRow) => this.matchForwardRule({
+        ruleEmail,
+        userEmail: userEmailById[emailRow.userId]
+      }));
     }
     for (const emailRow of emailRowList) {
       if (tgBotStatus === settingConst.tgBotStatus.OPEN && tgChatId) {
@@ -70184,7 +70754,7 @@ var emailService = {
         allReceive ? void 0 : eq(email_default.accountId, accountId),
         eq(email_default.type, emailConst.type.RECEIVE)
       )
-    ).orderBy(desc(email_default.emailId)).limit(20);
+    ).orderBy(desc(email_default.emailId)).limit(50);
     await this.emailAddAtt(c3, list);
     for (const item of list) {
       item.listText = this.toListText(item);
@@ -70282,9 +70852,10 @@ var emailService = {
     let list = await orm(c3).select({ ...emailListColumns, userEmail: user_default.email }).from(email_default).leftJoin(user_default, eq(email_default.userId, user_default.userId)).where(
       and(
         gt(email_default.emailId, emailId),
-        eq(email_default.type, emailConst.type.RECEIVE)
+        eq(email_default.type, emailConst.type.RECEIVE),
+        ne(email_default.status, emailConst.status.SAVING)
       )
-    ).orderBy(desc(email_default.emailId)).limit(20);
+    ).orderBy(desc(email_default.emailId)).limit(50);
     await this.emailAddAtt(c3, list);
     for (const item of list) {
       item.listText = this.toListText(item);
@@ -70300,6 +70871,7 @@ var emailService = {
         emailRow.attList = atts;
       });
     }
+    await proxy_service_default.rewriteList(c3, list);
   },
   async restoreByUserId(c3, userId) {
     await orm(c3).update(email_default).set({ isDel: isDel.NORMAL }).where(eq(email_default.userId, userId)).run();
@@ -70636,7 +71208,7 @@ var accountService = {
 var account_service_default = accountService;
 
 // src/utils/crypto-utils.js
-var encoder2 = new TextEncoder();
+var encoder3 = new TextEncoder();
 var saltHashUtils = {
   generateSalt(length = 16) {
     const array = new Uint8Array(length);
@@ -70649,7 +71221,7 @@ var saltHashUtils = {
     return { salt, hash };
   },
   async genHashPassword(password, salt) {
-    const data = encoder2.encode(salt + password);
+    const data = encoder3.encode(salt + password);
     const hashBuffer = await crypto.subtle.digest("SHA-256", data);
     const hashArray = Array.from(new Uint8Array(hashBuffer));
     return btoa(String.fromCharCode(...hashArray));
@@ -70952,9 +71524,15 @@ var loginService = {
     return { type: regKeyRow.roleId, regKeyId: regKeyRow.regKeyId };
   },
   async login(c3, params, noVerifyPwd = false) {
-    const { email: email4, password } = params;
+    const { email: email4, password, token: token2 } = params;
     if ((!email4 || !password) && !noVerifyPwd) {
       throw new biz_error_default(t3("emailAndPwdEmpty"));
+    }
+    if (!noVerifyPwd) {
+      const { loginVerify, loginVerifyCount = 1 } = await setting_service_default.query(c3);
+      if (loginVerify === settingConst.loginVerify.OPEN || loginVerify === settingConst.loginVerify.COUNT && !await verify_record_service_default.consumeLoginAttempt(c3, loginVerifyCount)) {
+        await turnstile_service_default.verify(c3, token2);
+      }
     }
     const userRow = await user_service_default.selectByEmailIncludeDel(c3, email4);
     if (!userRow) {
@@ -71197,6 +71775,16 @@ var userService = {
     }
     const { salt, hash } = await crypto_utils_default.hashPassword(password);
     await orm(c3).update(user_default).set({ password: hash, salt }).where(eq(user_default.userId, userId)).run();
+    if (user_context_default.getUserId(c3) !== userId) {
+      return;
+    }
+    const sessionToken = await user_context_default.getToken(c3);
+    const authInfo = await c3.env.kv.get(kv_const_default.AUTH_INFO + userId, { type: "json" });
+    if (!authInfo) {
+      return;
+    }
+    authInfo.tokens = sessionToken ? [sessionToken] : [];
+    await c3.env.kv.put(kv_const_default.AUTH_INFO + userId, JSON.stringify(authInfo), { expirationTtl: constant_default.TOKEN_EXPIRE });
   },
   selectByEmail(c3, email4) {
     return orm(c3).select().from(user_default).where(
@@ -71372,6 +71960,31 @@ var userService = {
   },
   async updateAllUserType(c3, type, curType) {
     await orm(c3).update(user_default).set({ type }).where(eq(user_default.type, curType)).run();
+  },
+  async initAdmin(c3) {
+    const email4 = c3.env.admin;
+    const password = c3.env.password;
+    if (!email4 || !password) {
+      return;
+    }
+    const exist = await userService.selectByEmailIncludeDel(c3, email4);
+    if (exist) {
+      return;
+    }
+    const role2 = await role_service_default.selectDefaultRole(c3);
+    const { salt, hash } = await crypto_utils_default.hashPassword(password);
+    const userId = await userService.insert(c3, {
+      email: email4,
+      password: hash,
+      salt,
+      type: role2?.roleId || 1
+    });
+    await userService.updateUserInfo(c3, userId, true);
+    await account_service_default.insert(c3, {
+      userId,
+      email: email4,
+      name: email_utils_default.getName(email4)
+    });
   },
   async add(c3, params) {
     let { email: email4, type, password } = params;
@@ -72055,30 +72668,41 @@ var dbInit = {
       return c3.text("\u274C JWT secret mismatch");
     }
     await this.intDB(c3);
-    await this.v1_1DB(c3);
-    await this.v1_2DB(c3);
-    await this.v1_3DB(c3);
-    await this.v1_3_1DB(c3);
-    await this.v1_4DB(c3);
-    await this.v1_5DB(c3);
-    await this.v1_6DB(c3);
-    await this.v1_7DB(c3);
-    await this.v2DB(c3);
     await this.v2_3DB(c3);
     await this.v2_4DB(c3);
     await this.v2_5DB(c3);
     await this.v2_6DB(c3);
     await this.v2_7DB(c3);
     await this.v2_8DB(c3);
-    await this.v2_9DB(c3);
     await this.v3_0DB(c3);
     await this.v3_1DB(c3);
     await this.v3_2DB(c3);
     await this.v3_3DB(c3);
     await this.v3_4DB(c3);
     await this.v3_5DB(c3);
+    await this.v3_6DB(c3);
+    await user_service_default.initAdmin(c3);
     await setting_service_default.refresh(c3);
     return c3.text("success");
+  },
+  // 上游 v3.6.0：auto_refresh 值域迁移 + 登录验证字段
+  async v3_6DB(c3) {
+    try {
+      await c3.env.db.prepare(`
+				UPDATE setting SET auto_refresh = CASE WHEN auto_refresh = 0 THEN 1 ELSE 2 END
+				WHERE auto_refresh NOT IN (1, 2)
+			`).run();
+    } catch (e3) {
+      console.warn(`sql skip:${e3.message}`);
+    }
+    try {
+      await c3.env.db.batch([
+        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN login_verify INTEGER NOT NULL DEFAULT 1`),
+        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN login_verify_count INTEGER NOT NULL DEFAULT 1`)
+      ]);
+    } catch (e3) {
+      console.warn(`sql skip:${e3.message}`);
+    }
   },
   // 本地定制（v0.7.5 分组 + v0.7.7 记事本 + 上游 v3.5.0 搜索索引）
   async v3_5DB(c3) {
@@ -72124,7 +72748,7 @@ var dbInit = {
     try {
       await c3.env.db.prepare(`ALTER TABLE email ADD COLUMN sender_email TEXT NOT NULL DEFAULT '';`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v3_3DB(c3) {
@@ -72135,7 +72759,7 @@ var dbInit = {
         c3.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_email_create_time ON email(create_time)`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.batch([
@@ -72145,7 +72769,7 @@ var dbInit = {
         c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN webhook_secret TEXT NOT NULL DEFAULT '';`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v3_2DB(c3) {
@@ -72162,7 +72786,7 @@ var dbInit = {
         await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN google_switch INTEGER NOT NULL DEFAULT 1;`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.batch([
@@ -72196,7 +72820,7 @@ var dbInit = {
     try {
       await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN sync_delete INTEGER NOT NULL DEFAULT 0;`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v3_0DB(c3) {
@@ -72207,7 +72831,7 @@ var dbInit = {
         await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN ai_code_filter TEXT NOT NULL DEFAULT '';`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.batch([
@@ -72216,14 +72840,7 @@ var dbInit = {
         c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN black_from TEXT NOT NULL DEFAULT '';`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
-    }
-  },
-  async v2_9DB(c3) {
-    try {
-      await c3.env.db.prepare(`UPDATE setting SET auto_refresh = 5 WHERE auto_refresh = 1;`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_8DB(c3) {
@@ -72232,7 +72849,7 @@ var dbInit = {
         c3.env.db.prepare(`ALTER TABLE account ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_7DB(c3) {
@@ -72241,21 +72858,21 @@ var dbInit = {
         c3.env.db.prepare(`ALTER TABLE setting RENAME COLUMN auto_refresh_time TO auto_refresh;`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_6DB(c3) {
     try {
       await c3.env.db.prepare(`ALTER TABLE account ADD COLUMN all_receive INTEGER NOT NULL DEFAULT 0;`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_5DB(c3) {
     try {
       await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN email_prefix_filter text NOT NULL DEFAULT '';`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.batch([
@@ -72263,7 +72880,7 @@ var dbInit = {
         c3.env.db.prepare(`UPDATE email SET unread = 1;`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_4DB(c3) {
@@ -72284,12 +72901,12 @@ var dbInit = {
 				)
 			`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN min_email_prefix INTEGER NOT NULL DEFAULT 1;`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
   async v2_3DB(c3) {
@@ -72301,437 +72918,284 @@ var dbInit = {
         c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN tg_msg_from TEXT NOT NULL DEFAULT 'only-name';`)
       ]);
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
     try {
       await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN tg_msg_text TEXT NOT NULL DEFAULT 'show';`).run();
     } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
+      console.warn(`sql skip:${e3.message}`);
     }
   },
-  async v2DB(c3) {
-    try {
-      await c3.env.db.batch([
-        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN bucket TEXT NOT NULL DEFAULT '';`),
-        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN region TEXT NOT NULL DEFAULT '';`),
-        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';`),
-        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN s3_access_key TEXT NOT NULL DEFAULT '';`),
-        c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN s3_secret_key TEXT NOT NULL DEFAULT '';`),
-        c3.env.db.prepare(`DELETE FROM perm WHERE perm_key = 'setting:clean'`)
-      ]);
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
-    }
-  },
-  async v1_7DB(c3) {
-    try {
-      await c3.env.db.prepare(`ALTER TABLE setting ADD COLUMN login_domain INTEGER NOT NULL DEFAULT 0;`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
-    }
-  },
-  async v1_6DB(c3) {
-    const noticeContent = "\u672C\u9879\u76EE\u4EC5\u4F9B\u5B66\u4E60\u4EA4\u6D41\uFF0C\u7981\u6B62\u7528\u4E8E\u8FDD\u6CD5\u4E1A\u52A1\n<br>\n\u8BF7\u9075\u5B88\u5F53\u5730\u6CD5\u89C4\uFF0C\u4F5C\u8005\u4E0D\u627F\u62C5\u4EFB\u4F55\u6CD5\u5F8B\u8D23\u4EFB";
-    const ADD_COLUMN_SQL_LIST = [
-      `ALTER TABLE setting ADD COLUMN reg_verify_count INTEGER NOT NULL DEFAULT 1;`,
-      `ALTER TABLE setting ADD COLUMN add_verify_count INTEGER NOT NULL DEFAULT 1;`,
-      `CREATE TABLE IF NOT EXISTS verify_record (
-				vr_id INTEGER PRIMARY KEY AUTOINCREMENT,
-				ip TEXT NOT NULL DEFAULT '',
-				count INTEGER NOT NULL DEFAULT 1,
-				type INTEGER NOT NULL DEFAULT 0,
-				update_time DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`,
-      `ALTER TABLE setting ADD COLUMN notice_title TEXT NOT NULL DEFAULT 'Cloud Mail';`,
-      `ALTER TABLE setting ADD COLUMN notice_content TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE setting ADD COLUMN notice_type TEXT NOT NULL DEFAULT 'none';`,
-      `ALTER TABLE setting ADD COLUMN notice_duration INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE setting ADD COLUMN notice_offset INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE setting ADD COLUMN notice_position TEXT NOT NULL DEFAULT 'top-right';`,
-      `ALTER TABLE setting ADD COLUMN notice_width INTEGER NOT NULL DEFAULT 340;`,
-      `ALTER TABLE setting ADD COLUMN notice INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE setting ADD COLUMN no_recipient INTEGER NOT NULL DEFAULT 1;`,
-      `UPDATE role SET avail_domain = '' WHERE role.avail_domain LIKE '@%';`,
-      `CREATE INDEX IF NOT EXISTS idx_email_user_id_account_id ON email(user_id, account_id);`
-    ];
-    const promises = ADD_COLUMN_SQL_LIST.map(async (sql2) => {
-      try {
-        await c3.env.db.prepare(sql2).run();
-      } catch (e3) {
-        console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\uFF1A${e3.message}`);
-      }
-    });
-    await Promise.all(promises);
-    await c3.env.db.prepare(`UPDATE setting SET notice_content = ? WHERE notice_content = '';`).bind(noticeContent).run();
-    try {
-      await c3.env.db.batch([
-        c3.env.db.prepare(`DROP INDEX IF EXISTS idx_account_email`),
-        c3.env.db.prepare(`DROP INDEX IF EXISTS idx_user_email`),
-        c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_email_nocase ON account (email COLLATE NOCASE)`),
-        c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_nocase ON user (email COLLATE NOCASE)`)
-      ]);
-    } catch (e3) {
-      console.warn(e3.message);
-    }
-  },
-  async v1_5DB(c3) {
-    await c3.env.db.prepare(`UPDATE perm SET perm_key = 'all-email:query' WHERE perm_key = 'sys-email:query'`).run();
-    await c3.env.db.prepare(`UPDATE perm SET perm_key = 'all-email:delete' WHERE perm_key = 'sys-email:delete'`).run();
-    try {
-      await c3.env.db.prepare(`ALTER TABLE role ADD COLUMN avail_domain TEXT NOT NULL DEFAULT ''`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\u6DFB\u52A0\uFF1A${e3.message}`);
-    }
-  },
-  async v1_4DB(c3) {
-    await c3.env.db.prepare(`
-      CREATE TABLE IF NOT EXISTS reg_key (
-				rege_key_id INTEGER PRIMARY KEY AUTOINCREMENT,
-				code TEXT NOT NULL COLLATE NOCASE DEFAULT '',
-				count INTEGER NOT NULL DEFAULT 0,
-				role_id INTEGER NOT NULL DEFAULT 0,
-				user_id INTEGER NOT NULL DEFAULT 0,
-				expire_time DATETIME,
-				create_time DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `).run();
-    try {
-      await c3.env.db.prepare(`
-				CREATE UNIQUE INDEX IF NOT EXISTS idx_setting_code ON reg_key(code COLLATE NOCASE)
-			`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u521B\u5EFA\u7D22\u5F15\uFF1A${e3.message}`);
-    }
-    try {
-      await c3.env.db.prepare(`
-        INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
-        (33,'\u6CE8\u518C\u5BC6\u94A5', NULL, 0, 1, 5.1),
-        (34,'\u5BC6\u94A5\u67E5\u770B', 'reg-key:query', 33, 2, 0),
-        (35,'\u5BC6\u94A5\u6DFB\u52A0', 'reg-key:add', 33, 2, 1),
-        (36,'\u5BC6\u94A5\u5220\u9664', 'reg-key:delete', 33, 2, 2)`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u6570\u636E\uFF1A${e3.message}`);
-    }
-    const ADD_COLUMN_SQL_LIST = [
-      `ALTER TABLE setting ADD COLUMN reg_key INTEGER NOT NULL DEFAULT 1;`,
-      `ALTER TABLE role ADD COLUMN ban_email TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE role ADD COLUMN ban_email_type INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE user ADD COLUMN reg_key_id INTEGER NOT NULL DEFAULT 0;`
-    ];
-    const promises = ADD_COLUMN_SQL_LIST.map(async (sql2) => {
-      try {
-        await c3.env.db.prepare(sql2).run();
-      } catch (e3) {
-        console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\u6DFB\u52A0\uFF1A${e3.message}`);
-      }
-    });
-    await Promise.all(promises);
-  },
-  async v1_3_1DB(c3) {
-    await c3.env.db.prepare(`UPDATE email SET name = SUBSTR(send_email, 1, INSTR(send_email, '@') - 1) WHERE (name IS NULL OR name = '') AND type = ${emailConst.type.RECEIVE}`).run();
-  },
-  async v1_3DB(c3) {
-    const ADD_COLUMN_SQL_LIST = [
-      `ALTER TABLE setting ADD COLUMN tg_bot_token TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE setting ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE setting ADD COLUMN tg_bot_status INTEGER NOT NULL DEFAULT 1;`,
-      `ALTER TABLE setting ADD COLUMN forward_email TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE setting ADD COLUMN forward_status INTEGER TIME NOT NULL DEFAULT 1;`,
-      `ALTER TABLE setting ADD COLUMN rule_email TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE setting ADD COLUMN rule_type INTEGER NOT NULL DEFAULT 0;`
-    ];
-    const promises = ADD_COLUMN_SQL_LIST.map(async (sql2) => {
-      try {
-        await c3.env.db.prepare(sql2).run();
-      } catch (e3) {
-        console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\u6DFB\u52A0\uFF1A${e3.message}`);
-      }
-    });
-    await Promise.all(promises);
-    const nameColumn = await c3.env.db.prepare(`SELECT * FROM pragma_table_info('email') WHERE name = 'to_email' limit 1`).first();
-    if (nameColumn) {
-      return;
-    }
-    const queryList = [];
-    queryList.push(c3.env.db.prepare(`ALTER TABLE email ADD COLUMN to_email TEXT NOT NULL DEFAULT ''`));
-    queryList.push(c3.env.db.prepare(`ALTER TABLE email ADD COLUMN to_name TEXT NOT NULL DEFAULT ''`));
-    queryList.push(c3.env.db.prepare(`UPDATE email SET to_email = json_extract(recipient, '$[0].address'), to_name = json_extract(recipient, '$[0].name')`));
-    await c3.env.db.batch(queryList);
-  },
-  async v1_2DB(c3) {
-    const ADD_COLUMN_SQL_LIST = [
-      `ALTER TABLE email ADD COLUMN recipient TEXT NOT NULL DEFAULT '[]';`,
-      `ALTER TABLE email ADD COLUMN cc TEXT NOT NULL DEFAULT '[]';`,
-      `ALTER TABLE email ADD COLUMN bcc TEXT NOT NULL DEFAULT '[]';`,
-      `ALTER TABLE email ADD COLUMN message_id TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE email ADD COLUMN in_reply_to TEXT NOT NULL DEFAULT '';`,
-      `ALTER TABLE email ADD COLUMN relation TEXT NOT NULL DEFAULT '';`
-    ];
-    const promises = ADD_COLUMN_SQL_LIST.map(async (sql2) => {
-      try {
-        await c3.env.db.prepare(sql2).run();
-      } catch (e3) {
-        console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\u6DFB\u52A0\uFF1A${e3.message}`);
-      }
-    });
-    await Promise.all(promises);
-    await this.receiveEmailToRecipient(c3);
-    await this.initAccountName(c3);
-    try {
-      await c3.env.db.prepare(`
-        INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
-        (31,'\u5206\u6790\u9875', NULL, 0, 1, 2.1),
-        (32,'\u6570\u636E\u67E5\u770B', 'analysis:query', 31, 2, 1)`).run();
-    } catch (e3) {
-      console.warn(`\u8DF3\u8FC7\u6570\u636E\uFF1A${e3.message}`);
-    }
-  },
-  async v1_1DB(c3) {
-    const ADD_COLUMN_SQL_LIST = [
-      `ALTER TABLE email ADD COLUMN type INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE email ADD COLUMN status INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE email ADD COLUMN resend_email_id TEXT;`,
-      `ALTER TABLE email ADD COLUMN message TEXT;`,
-      `ALTER TABLE setting ADD COLUMN resend_tokens TEXT NOT NULL DEFAULT '{}';`,
-      `ALTER TABLE setting ADD COLUMN send INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE setting ADD COLUMN r2_domain TEXT;`,
-      `ALTER TABLE setting ADD COLUMN site_key TEXT;`,
-      `ALTER TABLE setting ADD COLUMN secret_key TEXT;`,
-      `ALTER TABLE setting ADD COLUMN background TEXT;`,
-      `ALTER TABLE setting ADD COLUMN login_opacity INTEGER NOT NULL DEFAULT 0.90;`,
-      `ALTER TABLE user ADD COLUMN create_ip TEXT;`,
-      `ALTER TABLE user ADD COLUMN active_ip TEXT;`,
-      `ALTER TABLE user ADD COLUMN os TEXT;`,
-      `ALTER TABLE user ADD COLUMN browser TEXT;`,
-      `ALTER TABLE user ADD COLUMN device TEXT;`,
-      `ALTER TABLE user ADD COLUMN sort INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE user ADD COLUMN send_count INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE attachments ADD COLUMN status INTEGER NOT NULL DEFAULT 0;`,
-      `ALTER TABLE attachments ADD COLUMN type INTEGER NOT NULL DEFAULT 0;`
-    ];
-    const promises = ADD_COLUMN_SQL_LIST.map(async (sql2) => {
-      try {
-        await c3.env.db.prepare(sql2).run();
-      } catch (e3) {
-        console.warn(`\u8DF3\u8FC7\u5B57\u6BB5\u6DFB\u52A0\uFF1A${e3.message}`);
-      }
-    });
-    await Promise.all(promises);
-    await c3.env.db.prepare(`
-      CREATE TABLE IF NOT EXISTS perm (
-        perm_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        perm_key TEXT,
-        pid INTEGER NOT NULL DEFAULT 0,
-        type INTEGER NOT NULL DEFAULT 2,
-        sort INTEGER
-      )
-    `).run();
-    const { permTotal } = await c3.env.db.prepare(`SELECT COUNT(*) as permTotal FROM perm`).first();
-    if (permTotal === 0) {
-      await c3.env.db.prepare(`
-        INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
-        (1, '\u90AE\u4EF6', NULL, 0, 0, 0),
-        (2, '\u90AE\u4EF6\u5220\u9664', 'email:delete', 1, 2, 1),
-        (3, '\u90AE\u4EF6\u53D1\u9001', 'email:send', 1, 2, 0),
-        (4, '\u4E2A\u4EBA\u8BBE\u7F6E', '', 0, 1, 2),
-        (5, '\u7528\u6237\u6CE8\u9500', 'my:delete', 4, 2, 0),
-        (6, '\u7528\u6237\u4FE1\u606F', NULL, 0, 1, 3),
-        (7, '\u7528\u6237\u67E5\u770B', 'user:query', 6, 2, 0),
-        (8, '\u5BC6\u7801\u4FEE\u6539', 'user:set-pwd', 6, 2, 2),
-        (9, '\u72B6\u6001\u4FEE\u6539', 'user:set-status', 6, 2, 3),
-        (10, '\u6743\u9650\u4FEE\u6539', 'user:set-type', 6, 2, 4),
-        (11, '\u7528\u6237\u5220\u9664', 'user:delete', 6, 2, 7),
-        (12, '\u7528\u6237\u6536\u85CF', 'user:star', 6, 2, 5),
-        (13, '\u6743\u9650\u63A7\u5236', '', 0, 1, 5),
-        (14, '\u8EAB\u4EFD\u67E5\u770B', 'role:query', 13, 2, 0),
-        (15, '\u8EAB\u4EFD\u4FEE\u6539', 'role:set', 13, 2, 1),
-        (16, '\u8EAB\u4EFD\u5220\u9664', 'role:delete', 13, 2, 2),
-        (17, '\u7CFB\u7EDF\u8BBE\u7F6E', '', 0, 1, 6),
-        (18, '\u8BBE\u7F6E\u67E5\u770B', 'setting:query', 17, 2, 0),
-        (19, '\u8BBE\u7F6E\u4FEE\u6539', 'setting:set', 17, 2, 1),
-        (21, '\u90AE\u7BB1\u4FA7\u680F', '', 0, 0, 1),
-        (22, '\u90AE\u7BB1\u67E5\u770B', 'account:query', 21, 2, 0),
-        (23, '\u90AE\u7BB1\u6DFB\u52A0', 'account:add', 21, 2, 1),
-        (24, '\u90AE\u7BB1\u5220\u9664', 'account:delete', 21, 2, 2),
-        (25, '\u7528\u6237\u6DFB\u52A0', 'user:add', 6, 2, 1),
-        (26, '\u53D1\u4EF6\u91CD\u7F6E', 'user:reset-send', 6, 2, 6),
-        (27, '\u90AE\u4EF6\u5217\u8868', '', 0, 1, 4),
-        (28, '\u90AE\u4EF6\u67E5\u770B', 'all-email:query', 27, 2, 0),
-        (29, '\u90AE\u4EF6\u5220\u9664', 'all-email:delete', 27, 2, 0),
-				(30, '\u8EAB\u4EFD\u6DFB\u52A0', 'role:add', 13, 2, -1)
-      `).run();
-    }
-    await c3.env.db.prepare(`UPDATE perm SET perm_key = 'setting:clean' WHERE perm_key = 'seting:clear'`).run();
-    await c3.env.db.prepare(`DELETE FROM perm WHERE perm_key = 'user:star'`).run();
-    await c3.env.db.prepare(`
-      CREATE TABLE IF NOT EXISTS role (
-        role_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        key TEXT,
-        create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-        sort INTEGER DEFAULT 0,
-        description TEXT,
-        user_id INTEGER,
-        is_default INTEGER DEFAULT 0,
-        send_count INTEGER,
-        send_type TEXT NOT NULL DEFAULT 'count',
-        account_count INTEGER
-      )
-    `).run();
-    const { roleCount } = await c3.env.db.prepare(`SELECT COUNT(*) as roleCount FROM role`).first();
-    if (roleCount === 0) {
-      await c3.env.db.prepare(`
-        INSERT INTO role (
-          role_id, name, key, create_time, sort, description, user_id, is_default, send_count, send_type, account_count
-        ) VALUES (
-          1, '\u666E\u901A\u7528\u6237', NULL, '0000-00-00 00:00:00', 0, '\u53EA\u6709\u666E\u901A\u4F7F\u7528\u6743\u9650', 0, 1, NULL, 'ban', 10
-        )
-      `).run();
-    }
-    await c3.env.db.prepare(`
-      CREATE TABLE IF NOT EXISTS role_perm (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        role_id INTEGER,
-        perm_id INTEGER
-      )
-    `).run();
-    const { rolePermCount } = await c3.env.db.prepare(`SELECT COUNT(*) as rolePermCount FROM role_perm`).first();
-    if (rolePermCount === 0) {
-      await c3.env.db.prepare(`
-        INSERT INTO role_perm (id, role_id, perm_id) VALUES
-          (100, 1, 2),
-          (101, 1, 21),
-          (102, 1, 22),
-          (103, 1, 23),
-          (104, 1, 24),
-          (105, 1, 4),
-          (106, 1, 5),
-          (107, 1, 1),
-          (108, 1, 3)
-      `).run();
-    }
-  },
+  // 2.0 及之前：最终表结构一次 batch 建好，不再逐步 ALTER
   async intDB(c3) {
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS email (
-			email_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-			send_email TEXT,
-			name TEXT,
-			account_id INTEGER NOT NULL,
-			user_id INTEGER NOT NULL,
-			subject TEXT,
-			content TEXT,
-			text TEXT,
-			create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
-			is_del INTEGER DEFAULT 0 NOT NULL
-		  )
-		`).run();
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS star (
-			star_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			email_id INTEGER NOT NULL,
-			create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-		  )
-		`).run();
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS attachments (
-			att_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			user_id INTEGER NOT NULL,
-			email_id INTEGER NOT NULL,
-			account_id INTEGER NOT NULL,
-			key TEXT NOT NULL,
-			filename TEXT,
-			mime_type TEXT,
-			size INTEGER,
-			disposition TEXT,
-			related TEXT,
-			content_id TEXT,
-			encoding TEXT,
-			create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
-		  )
-		`).run();
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS user (
-			user_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL,
-			type INTEGER DEFAULT 1 NOT NULL,
-			password TEXT NOT NULL,
-			salt TEXT NOT NULL,
-			status INTEGER DEFAULT 0 NOT NULL,
-			create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-			active_time DATETIME,
-			is_del INTEGER DEFAULT 0 NOT NULL
-		  )
-		`).run();
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS account (
-			account_id INTEGER PRIMARY KEY AUTOINCREMENT,
-			email TEXT NOT NULL,
-			status INTEGER DEFAULT 0 NOT NULL,
-			latest_email_time DATETIME,
-			create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-			user_id INTEGER NOT NULL,
-			is_del INTEGER DEFAULT 0 NOT NULL
-		  )
-		`).run();
-    await c3.env.db.prepare(`
-		  CREATE TABLE IF NOT EXISTS setting (
-			register INTEGER NOT NULL,
-			receive INTEGER NOT NULL,
-			add_email INTEGER NOT NULL,
-			many_email INTEGER NOT NULL,
-			title TEXT NOT NULL,
-			auto_refresh INTEGER NOT NULL,
-			register_verify INTEGER NOT NULL,
-			add_email_verify INTEGER NOT NULL
-		  )
-		`).run();
+    const noticeContent = "This project is for learning and communication only. Illegal use is prohibited.<br>Please comply with local laws. The author assumes no legal liability.<br><br>\u672C\u9879\u76EE\u4EC5\u4F9B\u5B66\u4E60\u4EA4\u6D41\uFF0C\u7981\u6B62\u7528\u4E8E\u8FDD\u6CD5\u4E1A\u52A1\u3002<br>\u8BF7\u9075\u5B88\u5F53\u5730\u6CD5\u89C4\uFF0C\u4F5C\u8005\u4E0D\u627F\u62C5\u4EFB\u4F55\u6CD5\u5F8B\u8D23\u4EFB\u3002";
     try {
-      await c3.env.db.prepare(`
-			  INSERT INTO setting (
-				register, receive, add_email, many_email, title, auto_refresh, register_verify, add_email_verify
-			  )
-			  SELECT 0, 0, 0, 0, 'Cloud Mail', 0, 1, 1
-			  WHERE NOT EXISTS (SELECT 1 FROM setting)
-			`).run();
+      await c3.env.db.batch([
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS email (
+						email_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+						send_email TEXT,
+						name TEXT,
+						account_id INTEGER NOT NULL,
+						user_id INTEGER NOT NULL,
+						subject TEXT,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+						is_del INTEGER DEFAULT 0 NOT NULL,
+						type INTEGER NOT NULL DEFAULT 0,
+						status INTEGER NOT NULL DEFAULT 0,
+						resend_email_id TEXT,
+						message TEXT,
+						recipient TEXT NOT NULL DEFAULT '[]',
+						cc TEXT NOT NULL DEFAULT '[]',
+						bcc TEXT NOT NULL DEFAULT '[]',
+						message_id TEXT NOT NULL DEFAULT '',
+						in_reply_to TEXT NOT NULL DEFAULT '',
+						relation TEXT NOT NULL DEFAULT '',
+						to_email TEXT NOT NULL DEFAULT '',
+						to_name TEXT NOT NULL DEFAULT '',
+						content TEXT,
+						text TEXT
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS star (
+						star_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						user_id INTEGER NOT NULL,
+						email_id INTEGER NOT NULL,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS attachments (
+						att_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						user_id INTEGER NOT NULL,
+						email_id INTEGER NOT NULL,
+						account_id INTEGER NOT NULL,
+						key TEXT NOT NULL,
+						filename TEXT,
+						mime_type TEXT,
+						size INTEGER,
+						disposition TEXT,
+						related TEXT,
+						content_id TEXT,
+						encoding TEXT,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+						status INTEGER NOT NULL DEFAULT 0,
+						type INTEGER NOT NULL DEFAULT 0
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS user (
+						user_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						email TEXT NOT NULL,
+						type INTEGER DEFAULT 1 NOT NULL,
+						password TEXT NOT NULL,
+						salt TEXT NOT NULL,
+						status INTEGER DEFAULT 0 NOT NULL,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+						active_time DATETIME,
+						is_del INTEGER DEFAULT 0 NOT NULL,
+						create_ip TEXT,
+						active_ip TEXT,
+						os TEXT,
+						browser TEXT,
+						device TEXT,
+						sort INTEGER NOT NULL DEFAULT 0,
+						send_count INTEGER NOT NULL DEFAULT 0,
+						reg_key_id INTEGER NOT NULL DEFAULT 0
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS account (
+						account_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						email TEXT NOT NULL,
+						name TEXT NOT NULL DEFAULT '',
+						status INTEGER DEFAULT 0 NOT NULL,
+						latest_email_time DATETIME,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+						user_id INTEGER NOT NULL,
+						is_del INTEGER DEFAULT 0 NOT NULL
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS setting (
+						register INTEGER NOT NULL DEFAULT 0,
+						receive INTEGER NOT NULL DEFAULT 0,
+						add_email INTEGER NOT NULL DEFAULT 0,
+						many_email INTEGER NOT NULL DEFAULT 0,
+						title TEXT NOT NULL DEFAULT '',
+						auto_refresh INTEGER NOT NULL DEFAULT 2,
+						register_verify INTEGER NOT NULL DEFAULT 1,
+						add_email_verify INTEGER NOT NULL DEFAULT 1,
+						resend_tokens TEXT NOT NULL DEFAULT '{}',
+						send INTEGER NOT NULL DEFAULT 0,
+						r2_domain TEXT,
+						site_key TEXT,
+						secret_key TEXT,
+						background TEXT,
+						login_opacity INTEGER NOT NULL DEFAULT 0.90,
+						tg_bot_token TEXT NOT NULL DEFAULT '',
+						tg_chat_id TEXT NOT NULL DEFAULT '',
+						tg_bot_status INTEGER NOT NULL DEFAULT 1,
+						forward_email TEXT NOT NULL DEFAULT '',
+						forward_status INTEGER NOT NULL DEFAULT 1,
+						rule_email TEXT NOT NULL DEFAULT '',
+						rule_type INTEGER NOT NULL DEFAULT 0,
+						reg_key INTEGER NOT NULL DEFAULT 1,
+						reg_verify_count INTEGER NOT NULL DEFAULT 1,
+						add_verify_count INTEGER NOT NULL DEFAULT 1,
+						notice_title TEXT NOT NULL DEFAULT 'Cloud Mail',
+						notice_content TEXT NOT NULL DEFAULT '',
+						notice_type TEXT NOT NULL DEFAULT 'none',
+						notice_duration INTEGER NOT NULL DEFAULT 0,
+						notice_offset INTEGER NOT NULL DEFAULT 0,
+						notice_position TEXT NOT NULL DEFAULT 'top-right',
+						notice_width INTEGER NOT NULL DEFAULT 340,
+						notice INTEGER NOT NULL DEFAULT 0,
+						no_recipient INTEGER NOT NULL DEFAULT 1,
+						login_domain INTEGER NOT NULL DEFAULT 0,
+						bucket TEXT NOT NULL DEFAULT '',
+						region TEXT NOT NULL DEFAULT '',
+						endpoint TEXT NOT NULL DEFAULT '',
+						s3_access_key TEXT NOT NULL DEFAULT '',
+						s3_secret_key TEXT NOT NULL DEFAULT ''
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS perm (
+						perm_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						name TEXT NOT NULL,
+						perm_key TEXT,
+						pid INTEGER NOT NULL DEFAULT 0,
+						type INTEGER NOT NULL DEFAULT 2,
+						sort INTEGER
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS role (
+						role_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+						name TEXT NOT NULL,
+						key TEXT,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+						sort INTEGER DEFAULT 0,
+						description TEXT,
+						user_id INTEGER,
+						is_default INTEGER DEFAULT 0,
+						send_count INTEGER,
+						send_type TEXT NOT NULL DEFAULT 'count',
+						account_count INTEGER,
+						avail_domain TEXT NOT NULL DEFAULT '',
+						ban_email TEXT NOT NULL DEFAULT '',
+						ban_email_type INTEGER NOT NULL DEFAULT 0
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS role_perm (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						role_id INTEGER,
+						perm_id INTEGER
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS reg_key (
+						rege_key_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						code TEXT NOT NULL COLLATE NOCASE DEFAULT '',
+						count INTEGER NOT NULL DEFAULT 0,
+						role_id INTEGER NOT NULL DEFAULT 0,
+						user_id INTEGER NOT NULL DEFAULT 0,
+						expire_time DATETIME,
+						create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+					)
+				`),
+        c3.env.db.prepare(`
+					CREATE TABLE IF NOT EXISTS verify_record (
+						vr_id INTEGER PRIMARY KEY AUTOINCREMENT,
+						ip TEXT NOT NULL DEFAULT '',
+						count INTEGER NOT NULL DEFAULT 1,
+						type INTEGER NOT NULL DEFAULT 0,
+						update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+					)
+				`),
+        c3.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_email_user_id_account_id ON email(user_id, account_id)`),
+        c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_account_email_nocase ON account (email COLLATE NOCASE)`),
+        c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_email_nocase ON user (email COLLATE NOCASE)`),
+        c3.env.db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_setting_code ON reg_key(code COLLATE NOCASE)`),
+        c3.env.db.prepare(`
+					INSERT INTO setting (
+						register, receive, add_email, many_email, title, auto_refresh, register_verify, add_email_verify,
+						resend_tokens, send, login_opacity,
+						tg_bot_token, tg_chat_id, tg_bot_status, forward_email, forward_status, rule_email, rule_type,
+						reg_key, reg_verify_count, add_verify_count,
+						notice_title, notice_content, notice_type, notice_duration, notice_offset, notice_position, notice_width, notice, no_recipient,
+						login_domain, bucket, region, endpoint, s3_access_key, s3_secret_key
+					)
+					SELECT 0, 0, 0, 0, 'Cloud Mail', 2, 1, 1,
+						'{}', 0, 0.90,
+						'', '', 1, '', 1, '', 0,
+						1, 1, 1,
+						'Cloud Mail', ?, 'none', 0, 0, 'top-right', 340, 0, 1,
+						0, '', '', '', '', ''
+					WHERE NOT EXISTS (SELECT 1 FROM setting)
+				`).bind(noticeContent),
+        c3.env.db.prepare(`
+					INSERT OR IGNORE INTO perm (perm_id, name, perm_key, pid, type, sort) VALUES
+					(1, '\u90AE\u4EF6', NULL, 0, 0, 0),
+					(2, '\u90AE\u4EF6\u5220\u9664', 'email:delete', 1, 2, 1),
+					(3, '\u90AE\u4EF6\u53D1\u9001', 'email:send', 1, 2, 0),
+					(4, '\u4E2A\u4EBA\u8BBE\u7F6E', '', 0, 1, 2),
+					(5, '\u7528\u6237\u6CE8\u9500', 'my:delete', 4, 2, 0),
+					(6, '\u7528\u6237\u4FE1\u606F', NULL, 0, 1, 3),
+					(7, '\u7528\u6237\u67E5\u770B', 'user:query', 6, 2, 0),
+					(8, '\u5BC6\u7801\u4FEE\u6539', 'user:set-pwd', 6, 2, 2),
+					(9, '\u72B6\u6001\u4FEE\u6539', 'user:set-status', 6, 2, 3),
+					(10, '\u6743\u9650\u4FEE\u6539', 'user:set-type', 6, 2, 4),
+					(11, '\u7528\u6237\u5220\u9664', 'user:delete', 6, 2, 7),
+					(13, '\u6743\u9650\u63A7\u5236', '', 0, 1, 5),
+					(14, '\u8EAB\u4EFD\u67E5\u770B', 'role:query', 13, 2, 0),
+					(15, '\u8EAB\u4EFD\u4FEE\u6539', 'role:set', 13, 2, 1),
+					(16, '\u8EAB\u4EFD\u5220\u9664', 'role:delete', 13, 2, 2),
+					(17, '\u7CFB\u7EDF\u8BBE\u7F6E', '', 0, 1, 6),
+					(18, '\u8BBE\u7F6E\u67E5\u770B', 'setting:query', 17, 2, 0),
+					(19, '\u8BBE\u7F6E\u4FEE\u6539', 'setting:set', 17, 2, 1),
+					(21, '\u90AE\u7BB1\u4FA7\u680F', '', 0, 0, 1),
+					(22, '\u90AE\u7BB1\u67E5\u770B', 'account:query', 21, 2, 0),
+					(23, '\u90AE\u7BB1\u6DFB\u52A0', 'account:add', 21, 2, 1),
+					(24, '\u90AE\u7BB1\u5220\u9664', 'account:delete', 21, 2, 2),
+					(25, '\u7528\u6237\u6DFB\u52A0', 'user:add', 6, 2, 1),
+					(26, '\u53D1\u4EF6\u91CD\u7F6E', 'user:reset-send', 6, 2, 6),
+					(27, '\u90AE\u4EF6\u5217\u8868', '', 0, 1, 4),
+					(28, '\u90AE\u4EF6\u67E5\u770B', 'all-email:query', 27, 2, 0),
+					(29, '\u90AE\u4EF6\u5220\u9664', 'all-email:delete', 27, 2, 0),
+					(30, '\u8EAB\u4EFD\u6DFB\u52A0', 'role:add', 13, 2, -1),
+					(31, '\u5206\u6790\u9875', NULL, 0, 1, 2.1),
+					(32, '\u6570\u636E\u67E5\u770B', 'analysis:query', 31, 2, 1),
+					(33, '\u6CE8\u518C\u5BC6\u94A5', NULL, 0, 1, 5.1),
+					(34, '\u5BC6\u94A5\u67E5\u770B', 'reg-key:query', 33, 2, 0),
+					(35, '\u5BC6\u94A5\u6DFB\u52A0', 'reg-key:add', 33, 2, 1),
+					(36, '\u5BC6\u94A5\u5220\u9664', 'reg-key:delete', 33, 2, 2)
+				`),
+        // 先写入默认权限，再创建首个角色。两条语句共用同一个批次。
+        c3.env.db.prepare(`
+					WITH default_permissions(id, perm_id) AS (
+						VALUES (100, 2), (101, 21), (102, 22), (103, 23), (104, 24),
+						       (105, 4), (106, 5), (107, 1), (108, 3)
+					)
+					INSERT INTO role_perm (id, role_id, perm_id)
+					SELECT id, 1, perm_id FROM default_permissions
+					WHERE NOT EXISTS (SELECT 1 FROM role)
+					  AND NOT EXISTS (SELECT 1 FROM role_perm)
+				`),
+        c3.env.db.prepare(`
+					INSERT INTO role (
+						role_id, name, key, create_time, sort, description, user_id, is_default, send_count, send_type, account_count, avail_domain, ban_email, ban_email_type
+					)
+					SELECT 1, '\u666E\u901A\u7528\u6237', NULL, '0000-00-00 00:00:00', 0, '\u53EA\u6709\u666E\u901A\u4F7F\u7528\u6743\u9650', 0, 1, NULL, 'ban', 10, '', '', 0
+					WHERE NOT EXISTS (SELECT 1 FROM role)
+				`)
+      ]);
     } catch (e3) {
-      console.warn(e3);
+      console.warn(`sql skip:${e3.message}`);
     }
-  },
-  async receiveEmailToRecipient(c3) {
-    const receiveEmailColumn = await c3.env.db.prepare(`SELECT * FROM pragma_table_info('email') WHERE name = 'receive_email' limit 1`).first();
-    if (!receiveEmailColumn) {
-      return;
-    }
-    const queryList = [];
-    const { results } = await c3.env.db.prepare("SELECT receive_email,email_id FROM email").all();
-    results.forEach((emailRow) => {
-      const recipient = {};
-      recipient.address = emailRow.receive_email;
-      recipient.name = "";
-      const recipientStr = JSON.stringify([recipient]);
-      const sql2 = c3.env.db.prepare("UPDATE email SET recipient = ? WHERE email_id = ?").bind(recipientStr, emailRow.email_id);
-      queryList.push(sql2);
-    });
-    queryList.push(c3.env.db.prepare("ALTER TABLE email DROP COLUMN receive_email"));
-    await c3.env.db.batch(queryList);
-  },
-  async initAccountName(c3) {
-    const nameColumn = await c3.env.db.prepare(`SELECT * FROM pragma_table_info('account') WHERE name = 'name' limit 1`).first();
-    if (nameColumn) {
-      return;
-    }
-    const queryList = [];
-    queryList.push(c3.env.db.prepare(`ALTER TABLE account ADD COLUMN name TEXT NOT NULL DEFAULT ''`));
-    const { results } = await c3.env.db.prepare(`SELECT account_id, email FROM account`).all();
-    results.forEach((accountRow) => {
-      const name2 = email_utils_default.getName(accountRow.email);
-      const sql2 = c3.env.db.prepare("UPDATE account SET name = ? WHERE account_id = ?").bind(name2, accountRow.account_id);
-      queryList.push(sql2);
-    });
-    await c3.env.db.batch(queryList);
   }
 };
 
@@ -73030,7 +73494,8 @@ var publicService = {
     } else {
       query2.orderBy(desc(email_default.emailId));
     }
-    return query2.limit(size).offset(num);
+    const rows = await query2.limit(size).offset(num);
+    return proxy_service_default.rewriteList(c3, rows);
   },
   async addUser(c3, params) {
     const { list } = params;
@@ -73118,7 +73583,8 @@ hono_default.post("/public/addUser", async (c3) => {
 // src/api/telegram-api.js
 hono_default.get("/telegram/getEmail/:token", async (c3) => {
   const content = await telegram_service_default.getEmailContent(c3, c3.req.param());
-  c3.header("Cache-Control", "public, max-age=604800, immutable");
+  c3.header("Cache-Control", "public, max-age=3600, immutable");
+  c3.header("Content-Security-Policy", `default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'`);
   return c3.html(content);
 });
 
@@ -77015,9 +77481,12 @@ async function email3(message, env, ctx) {
       console.error(e3);
     }
     emailRow = await email_service_default.completeReceive({ env }, account2 ? emailConst.status.RECEIVE : emailConst.status.NOONE, emailRow.emailId);
+    notifyMailWs(env, ctx, emailRow);
     if (ruleType === settingConst.ruleType.RULE) {
-      const emails = ruleEmail.split(",");
-      if (!emails.includes(message.to)) {
+      if (!email_service_default.matchForwardRule({
+        ruleEmail,
+        userEmail: userRow?.email
+      })) {
         return;
       }
     }
@@ -77066,10 +77535,156 @@ function checkBlock(blackSubjectStr, blackContentStr, blackFromStr, email4) {
 }
 __name(checkBlock, "checkBlock");
 
+// src/websocket/auth.js
+async function getWsUser(env, token2) {
+  if (!token2) {
+    return null;
+  }
+  const result2 = await jwt_utils_default.verifyToken({ env }, token2);
+  if (!result2 || result2.gen !== constant_default.AUTH_GEN) {
+    return null;
+  }
+  const { userId, token: sessionToken } = result2;
+  if (!userId || !sessionToken) {
+    return null;
+  }
+  const authInfo = await env.kv.get(kv_const_default.AUTH_INFO + userId, { type: "json" });
+  if (!authInfo?.tokens?.includes(sessionToken)) {
+    return null;
+  }
+  return authInfo.user;
+}
+__name(getWsUser, "getWsUser");
+async function canWatchAllEmail(env, user2) {
+  if (!user2?.userId) {
+    return false;
+  }
+  if (user2.email && env.admin && user2.email === env.admin) {
+    return true;
+  }
+  const keys2 = await perm_service_default.userPermKeys({ env }, user2.userId);
+  return keys2.includes("all-email:query");
+}
+__name(canWatchAllEmail, "canWatchAllEmail");
+function hasValidWsOrigin(request) {
+  const origin = request.headers.get("Origin");
+  if (!origin) {
+    return true;
+  }
+  try {
+    const originHost = new URL(origin).hostname;
+    const reqHost = new URL(request.url).hostname;
+    if (originHost === reqHost) {
+      return true;
+    }
+    return isLocalHostname(originHost) && isLocalHostname(reqHost);
+  } catch {
+    return false;
+  }
+}
+__name(hasValidWsOrigin, "hasValidWsOrigin");
+function isLocalHostname(host) {
+  return host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host.endsWith(".local");
+}
+__name(isLocalHostname, "isLocalHostname");
+
+// src/websocket/connect.js
+var CLOSE_UNAUTHORIZED = 4401;
+async function handleWsUpgrade(request, env) {
+  if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+    return new Response("Expected WebSocket upgrade", { status: 426 });
+  }
+  if (!env.ws) {
+    return new Response("WebSocket unavailable", { status: 503 });
+  }
+  const url = new URL(request.url);
+  const token2 = url.searchParams.get("token") || request.headers.get(constant_default.TOKEN_HEADER);
+  const user2 = await getWsUser(env, token2);
+  const scope = url.searchParams.get("scope") || "inbox";
+  if (!hasValidWsOrigin(request) || !user2?.userId) {
+    return rejectUnauthorized();
+  }
+  if (scope === "all-email" && !await canWatchAllEmail(env, user2)) {
+    return rejectUnauthorized();
+  }
+  const hubName = scope === "all-email" ? ALL_EMAIL_HUB : String(user2.userId);
+  const stub = env.ws.getByName(hubName);
+  return stub.fetch(new Request("https://mail-ws/connect", request));
+}
+__name(handleWsUpgrade, "handleWsUpgrade");
+function rejectUnauthorized() {
+  const pair = new WebSocketPair();
+  const client = pair[0];
+  const server = pair[1];
+  server.accept();
+  try {
+    server.send(JSON.stringify({ type: "error", code: 401 }));
+  } catch {
+  }
+  server.close(CLOSE_UNAUTHORIZED, "Unauthorized");
+  return new Response(null, { status: 101, webSocket: client });
+}
+__name(rejectUnauthorized, "rejectUnauthorized");
+
+// src/websocket/hub.js
+import { DurableObject } from "cloudflare:workers";
+var MailHub = class extends DurableObject {
+  static {
+    __name(this, "MailHub");
+  }
+  // 接受浏览器的 WebSocket 升级，接入当前 hub。
+  async fetch(request) {
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected WebSocket upgrade", { status: 426 });
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1]);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+  // 向本 hub 上所有连接推送新邮件摘要。出站消息不计请求。
+  async notify(payload) {
+    const message = JSON.stringify(payload);
+    for (const socket of this.ctx.getWebSockets()) {
+      try {
+        socket.send(message);
+      } catch {
+        socket.close(1011, "Delivery failed");
+      }
+    }
+  }
+  // 处理客户端心跳：ping / { type: 'ping' } 回 pong，避免中间代理掐线。
+  async webSocketMessage(socket, message) {
+    if (message === "ping") {
+      socket.send("pong");
+      return;
+    }
+    if (typeof message !== "string") {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(message);
+      if (parsed?.type === "ping") {
+        socket.send("pong");
+      }
+    } catch {
+    }
+  }
+  // 客户端断开时关闭服务端套接字，便于对象休眠。
+  async webSocketClose(socket) {
+    socket.close();
+  }
+};
+
 // src/index.js
 var index_default = {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
+    if (url.pathname === "/realtime") {
+      return handleWsUpgrade(req, env);
+    }
+    if (url.pathname === "/proxy") {
+      return proxy_service_default.fetchImage(env, url.searchParams);
+    }
     if (url.pathname.startsWith("/api/")) {
       url.pathname = url.pathname.replace("/api", "");
       req = new Request(url.toString(), req);
@@ -77101,6 +77716,7 @@ var index_default = {
   }
 };
 export {
+  MailHub,
   index_default as default
 };
 /*! Bundled license information:
