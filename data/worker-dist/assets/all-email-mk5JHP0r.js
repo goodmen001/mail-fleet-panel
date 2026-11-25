@@ -1,0 +1,1 @@
+import{ay as t}from"./index-hO_fx7af.js";const e=t("all-email",{state:()=>({searchParams:{text:"",type:"subject",startDate:"",endDate:"",status:"all"}}),actions:{setSearchParams(a){this.searchParams={...this.searchParams,...a}}}});export{e as u};
